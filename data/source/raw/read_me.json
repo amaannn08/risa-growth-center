@@ -1,0 +1,34 @@
+[
+{
+"topic": "Context",
+"description": "ATTENDEE ACQUISITION DATA"
+},
+{
+"topic": "Source guidance",
+"description": "CampusFest 2025 is a fictional two-day event on 12–13 April 2025. Records cover 15 January–20 April 2025. All people and campaign activity are synthetic."
+},
+{
+"topic": "Source guidance",
+"description": "Build around the marketing questions you consider useful. The source records cover awareness activity, identified interest, engagement, registrations, historical registration status and actual attendance. Targets and approved marketing budget change over time. The supplied metrics are source fields; you choose the dashboard measures, comparisons and interface."
+},
+{
+"topic": "Source guidance",
+"description": "Names appear first so you can read the records. Stable IDs at the right distinguish entities and support joins. A person's name is a display label and may be shared by different people. Campaign and owner names are also supplied beside their IDs."
+},
+{
+"topic": "Source guidance",
+"description": "Each selected date means the end of that day in Asia/Kolkata. All source timestamps include +05:30. Use the latest eligible full-state history version for each entity. A new registration or a new status version is not a new person. No later outcome should appear in an earlier snapshot. Planned deadlines may be future dates. The event and campaign plans describe plans, not completed outcomes."
+},
+{
+"topic": "Source guidance",
+"description": "Some exact records repeat with the same stable event/history/activity ID after an import retry. Deduplicate identical source IDs. Separate admission attempts can still belong to the same person. Result, verification and person type distinguish actual external attendance from other records."
+},
+{
+"topic": "Source guidance",
+"description": "Campaign activity contains anonymous session and platform event counts. These do not represent globally unique identified people. The people and interaction tables contain identified person-level records. Summed reach and email opens do not prove incremental attendance. Campaign attribution records a source relationship; alternative attribution definitions must be explained. Campaign spend is whole INR, net posted debits less credits on their posting date. Draft requests are excluded from this source."
+},
+{
+"topic": "Source guidance",
+"description": "The Google Sheet contains typed dates and materialized source values. The CSV copy uses unambiguous ISO date text. The source pack contains no formulas or private reviewer answers."
+}
+]

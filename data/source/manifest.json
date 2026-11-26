@@ -1,0 +1,73 @@
+{
+  "workbook": "Attendee Dataset.xlsx",
+  "sha256": "d63f3e013e9a823e28ab0a0587703b2ed4344e443ade185606c2ce3427203469",
+  "converter_version": "1.0.0",
+  "sheets": {
+    "read_me": {
+      "sheet": "Read me",
+      "raw_rows": 8,
+      "unique_rows": 8,
+      "duplicate_extra_rows": 0
+    },
+    "field_guide": {
+      "sheet": "Field guide",
+      "raw_rows": 86,
+      "unique_rows": 86,
+      "duplicate_extra_rows": 0
+    },
+    "event": {
+      "sheet": "Event",
+      "raw_rows": 1,
+      "unique_rows": 1,
+      "duplicate_extra_rows": 0
+    },
+    "targets": {
+      "sheet": "Targets",
+      "raw_rows": 2,
+      "unique_rows": 2,
+      "duplicate_extra_rows": 0
+    },
+    "campaigns": {
+      "sheet": "Campaigns",
+      "raw_rows": 7,
+      "unique_rows": 7,
+      "duplicate_extra_rows": 0
+    },
+    "daily_marketing": {
+      "sheet": "Daily Marketing",
+      "raw_rows": 483,
+      "unique_rows": 481,
+      "duplicate_extra_rows": 2
+    },
+    "people": {
+      "sheet": "People",
+      "raw_rows": 3685,
+      "unique_rows": 3685,
+      "duplicate_extra_rows": 0
+    },
+    "interactions": {
+      "sheet": "Interest and Engagement",
+      "raw_rows": 11650,
+      "unique_rows": 11650,
+      "duplicate_extra_rows": 0
+    },
+    "registrations": {
+      "sheet": "Registrations",
+      "raw_rows": 2840,
+      "unique_rows": 2840,
+      "duplicate_extra_rows": 0
+    },
+    "registration_history": {
+      "sheet": "Registration History",
+      "raw_rows": 5911,
+      "unique_rows": 5907,
+      "duplicate_extra_rows": 4
+    },
+    "checkins": {
+      "sheet": "Check-ins",
+      "raw_rows": 3390,
+      "unique_rows": 3370,
+      "duplicate_extra_rows": 20
+    }
+  }
+}

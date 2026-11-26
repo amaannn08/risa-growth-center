@@ -1,0 +1,518 @@
+[
+{
+"source_table": "event.csv",
+"field": "event_name",
+"data_type": "text",
+"meaning": "Fictional event display name."
+},
+{
+"source_table": "event.csv",
+"field": "history_start",
+"data_type": "date",
+"meaning": "First covered snapshot date."
+},
+{
+"source_table": "event.csv",
+"field": "history_end",
+"data_type": "date",
+"meaning": "Last covered snapshot date."
+},
+{
+"source_table": "event.csv",
+"field": "event_starts_at",
+"data_type": "datetime",
+"meaning": "Planned event opening timestamp in IST."
+},
+{
+"source_table": "event.csv",
+"field": "event_ends_at",
+"data_type": "datetime",
+"meaning": "Planned event closing timestamp in IST."
+},
+{
+"source_table": "event.csv",
+"field": "timezone",
+"data_type": "text",
+"meaning": "Timezone for selected-day snapshots."
+},
+{
+"source_table": "event.csv",
+"field": "currency",
+"data_type": "text",
+"meaning": "Currency used for marketing spend and reported sponsor values."
+},
+{
+"source_table": "event.csv",
+"field": "fictional",
+"data_type": "boolean",
+"meaning": "All source records are synthetic."
+},
+{
+"source_table": "targets.csv",
+"field": "effective_at",
+"data_type": "datetime",
+"meaning": "This full version of the targets takes effect at this timestamp."
+},
+{
+"source_table": "targets.csv",
+"field": "identified_external_people_goal",
+"data_type": "number",
+"meaning": "Target cumulative distinct identified external people."
+},
+{
+"source_table": "targets.csv",
+"field": "registration_goal",
+"data_type": "number",
+"meaning": "Target distinct external people with a registration."
+},
+{
+"source_table": "targets.csv",
+"field": "unique_external_visitors_goal",
+"data_type": "number",
+"meaning": "Target distinct verified external event visitors."
+},
+{
+"source_table": "targets.csv",
+"field": "marketing_budget_inr",
+"data_type": "number",
+"meaning": "Approved marketing spend limit, whole INR."
+},
+{
+"source_table": "targets.csv",
+"field": "target_version",
+"data_type": "text",
+"meaning": "Readable label for the dated target plan."
+},
+{
+"source_table": "campaigns.csv",
+"field": "campaign_name",
+"data_type": "text",
+"meaning": "Readable campaign label. campaign_id is the stable campaign key."
+},
+{
+"source_table": "campaigns.csv",
+"field": "channel",
+"data_type": "text",
+"meaning": "Marketing distribution channel label."
+},
+{
+"source_table": "campaigns.csv",
+"field": "target_audience",
+"data_type": "text",
+"meaning": "Intended audience description, not an observed audience count."
+},
+{
+"source_table": "campaigns.csv",
+"field": "objective",
+"data_type": "text",
+"meaning": "Campaign purpose, not proof of an achieved outcome."
+},
+{
+"source_table": "campaigns.csv",
+"field": "owner_name",
+"data_type": "text",
+"meaning": "Readable synthetic owner label. owner_id is the stable owner key."
+},
+{
+"source_table": "campaigns.csv",
+"field": "created_at",
+"data_type": "datetime",
+"meaning": "When this source entity was created, as an ISO8601 IST timestamp."
+},
+{
+"source_table": "campaigns.csv",
+"field": "planned_start_at",
+"data_type": "datetime",
+"meaning": "Planned campaign start known at creation. It is not an actual result."
+},
+{
+"source_table": "campaigns.csv",
+"field": "planned_end_at",
+"data_type": "datetime",
+"meaning": "Planned campaign end known at creation. It is not an actual result."
+},
+{
+"source_table": "campaigns.csv",
+"field": "campaign_id",
+"data_type": "text",
+"meaning": "Stable campaign key. In registrations this is the recorded acquisition source; in interactions it is the action context. Empty on check-ins means unattributed."
+},
+{
+"source_table": "campaigns.csv",
+"field": "owner_id",
+"data_type": "text",
+"meaning": "Stable owner key matching the shared team dictionary."
+},
+{
+"source_table": "campaign_daily.csv",
+"field": "campaign_name",
+"data_type": "text",
+"meaning": "Readable campaign label. campaign_id is the stable campaign key."
+},
+{
+"source_table": "campaign_daily.csv",
+"field": "owner_name",
+"data_type": "text",
+"meaning": "Readable synthetic owner label. owner_id is the stable owner key."
+},
+{
+"source_table": "campaign_daily.csv",
+"field": "activity_date",
+"data_type": "date",
+"meaning": "Daily reporting date in IST, as ISO8601 YYYY-MM-DD. The aggregate is available at end of this day."
+},
+{
+"source_table": "campaign_daily.csv",
+"field": "impressions",
+"data_type": "number",
+"meaning": "Anonymous daily reported impression events. Not distinct people."
+},
+{
+"source_table": "campaign_daily.csv",
+"field": "clicks",
+"data_type": "number",
+"meaning": "Anonymous daily reported click events. Not distinct people and not registrations."
+},
+{
+"source_table": "campaign_daily.csv",
+"field": "reported_reach",
+"data_type": "number",
+"meaning": "Platform-reported reach for this day. Cross-day identity overlap is not supplied, so summing does not give globally unique people."
+},
+{
+"source_table": "campaign_daily.csv",
+"field": "landing_page_sessions",
+"data_type": "number",
+"meaning": "Anonymous daily landing-page sessions. Includes traffic without an identified person and repeat sessions."
+},
+{
+"source_table": "campaign_daily.csv",
+"field": "registration_starts",
+"data_type": "number",
+"meaning": "Anonymous daily form-start events. Not unique people or completed registrations. Identified form-start interactions are a subset."
+},
+{
+"source_table": "campaign_daily.csv",
+"field": "marketing_spend_inr",
+"data_type": "number",
+"meaning": "Net posted marketing ledger amount for this campaign/date in whole INR. Debit minus credit. Draft quotes excluded, import copies deduplicated. Negative values are vendor credits. Tax is not modeled."
+},
+{
+"source_table": "campaign_daily.csv",
+"field": "platform",
+"data_type": "text",
+"meaning": "Source reporting context for anonymous daily observations."
+},
+{
+"source_table": "campaign_daily.csv",
+"field": "activity_id",
+"data_type": "text",
+"meaning": "Stable daily reporting record ID. Exact repeated IDs are import copies and count once."
+},
+{
+"source_table": "campaign_daily.csv",
+"field": "campaign_id",
+"data_type": "text",
+"meaning": "Stable campaign key. In registrations this is the recorded acquisition source; in interactions it is the action context. Empty on check-ins means unattributed."
+},
+{
+"source_table": "campaign_daily.csv",
+"field": "owner_id",
+"data_type": "text",
+"meaning": "Stable owner key matching the shared team dictionary."
+},
+{
+"source_table": "people.csv",
+"field": "person_name",
+"data_type": "text",
+"meaning": "Synthetic natural full-name display label. Names can repeat; person_id is the identity key."
+},
+{
+"source_table": "people.csv",
+"field": "person_type",
+"data_type": "text",
+"meaning": "external, internal, staff or test. Historical attendee targets apply to distinct external visitors."
+},
+{
+"source_table": "people.csv",
+"field": "first_seen_at",
+"data_type": "datetime",
+"meaning": "When this identity first appears in the supplied acquisition or access records. Earlier than registration where upstream actions exist."
+},
+{
+"source_table": "people.csv",
+"field": "first_touch_source",
+"data_type": "text",
+"meaning": "campaign, internal_registration, walk_in or event_access. An external walk-in can have no campaign or registration."
+},
+{
+"source_table": "people.csv",
+"field": "first_campaign_name",
+"data_type": "text",
+"meaning": "Readable fixed first-source campaign label, if identified. Empty for unattributed walk-ins or event-access identities."
+},
+{
+"source_table": "people.csv",
+"field": "owner_name",
+"data_type": "text",
+"meaning": "Readable synthetic owner label. owner_id is the stable owner key."
+},
+{
+"source_table": "people.csv",
+"field": "person_id",
+"data_type": "text",
+"meaning": "Stable identity key. Preserved from earlier core attendance records or L-prefixed for new unregistered interested people."
+},
+{
+"source_table": "people.csv",
+"field": "first_campaign_id",
+"data_type": "text",
+"meaning": "Stable fixed first-source campaign key. Empty means no campaign assignment, not proof of zero acquisition cost."
+},
+{
+"source_table": "people.csv",
+"field": "owner_id",
+"data_type": "text",
+"meaning": "Stable owner key matching the shared team dictionary."
+},
+{
+"source_table": "lead_interactions.csv",
+"field": "person_name",
+"data_type": "text",
+"meaning": "Synthetic natural full-name display label. Names can repeat; person_id is the identity key."
+},
+{
+"source_table": "lead_interactions.csv",
+"field": "campaign_name",
+"data_type": "text",
+"meaning": "Readable campaign label. campaign_id is the stable campaign key."
+},
+{
+"source_table": "lead_interactions.csv",
+"field": "owner_name",
+"data_type": "text",
+"meaning": "Readable synthetic owner label. owner_id is the stable owner key."
+},
+{
+"source_table": "lead_interactions.csv",
+"field": "occurred_at",
+"data_type": "datetime",
+"meaning": "When this identified engagement action or admission observation occurs, as an ISO8601 IST timestamp. Filter it at or before the selected end of day."
+},
+{
+"source_table": "lead_interactions.csv",
+"field": "event_type",
+"data_type": "text",
+"meaning": "Dated identified action: page_visit, brochure_download, registration_start, event_question_submitted, nurture_email_sent, nurture_email_opened, nurture_email_clicked or opted_out."
+},
+{
+"source_table": "lead_interactions.csv",
+"field": "detail",
+"data_type": "text",
+"meaning": "Human-readable description of the identified action. It does not replace the structured event fields."
+},
+{
+"source_table": "lead_interactions.csv",
+"field": "interaction_id",
+"data_type": "text",
+"meaning": "Unique identified-action record key."
+},
+{
+"source_table": "lead_interactions.csv",
+"field": "person_id",
+"data_type": "text",
+"meaning": "Stable identity key. Preserved from earlier core attendance records or L-prefixed for new unregistered interested people."
+},
+{
+"source_table": "lead_interactions.csv",
+"field": "campaign_id",
+"data_type": "text",
+"meaning": "Stable campaign key. In registrations this is the recorded acquisition source; in interactions it is the action context. Empty on check-ins means unattributed."
+},
+{
+"source_table": "lead_interactions.csv",
+"field": "owner_id",
+"data_type": "text",
+"meaning": "Stable owner key matching the shared team dictionary."
+},
+{
+"source_table": "registrations.csv",
+"field": "person_name",
+"data_type": "text",
+"meaning": "Synthetic natural full-name display label. Names can repeat; person_id is the identity key."
+},
+{
+"source_table": "registrations.csv",
+"field": "campaign_name",
+"data_type": "text",
+"meaning": "Readable campaign label. campaign_id is the stable campaign key."
+},
+{
+"source_table": "registrations.csv",
+"field": "owner_name",
+"data_type": "text",
+"meaning": "Readable synthetic owner label. owner_id is the stable owner key."
+},
+{
+"source_table": "registrations.csv",
+"field": "registered_at",
+"data_type": "datetime",
+"meaning": "When this registration was created. An earlier lead action is not a completed registration."
+},
+{
+"source_table": "registrations.csv",
+"field": "registration_id",
+"data_type": "text",
+"meaning": "Stable registration key joining registrations, status history and check-ins. Empty for people without a registration."
+},
+{
+"source_table": "registrations.csv",
+"field": "person_id",
+"data_type": "text",
+"meaning": "Stable identity key. Preserved from earlier core attendance records or L-prefixed for new unregistered interested people."
+},
+{
+"source_table": "registrations.csv",
+"field": "campaign_id",
+"data_type": "text",
+"meaning": "Stable campaign key. In registrations this is the recorded acquisition source; in interactions it is the action context. Empty on check-ins means unattributed."
+},
+{
+"source_table": "registrations.csv",
+"field": "owner_id",
+"data_type": "text",
+"meaning": "Stable owner key matching the shared team dictionary."
+},
+{
+"source_table": "registration_history.csv",
+"field": "person_name",
+"data_type": "text",
+"meaning": "Synthetic natural full-name display label. Names can repeat; person_id is the identity key."
+},
+{
+"source_table": "registration_history.csv",
+"field": "campaign_name",
+"data_type": "text",
+"meaning": "Readable campaign label. campaign_id is the stable campaign key."
+},
+{
+"source_table": "registration_history.csv",
+"field": "owner_name",
+"data_type": "text",
+"meaning": "Readable synthetic owner label. owner_id is the stable owner key."
+},
+{
+"source_table": "registration_history.csv",
+"field": "effective_at",
+"data_type": "datetime",
+"meaning": "When this full registration-state version takes effect. For any date, choose latest eligible version per registration_id."
+},
+{
+"source_table": "registration_history.csv",
+"field": "status",
+"data_type": "text",
+"meaning": "interested, confirmed, cancelled or waitlisted. Reconfirmation updates the same registration/person."
+},
+{
+"source_table": "registration_history.csv",
+"field": "history_id",
+"data_type": "text",
+"meaning": "Stable registration-state version ID. Exact repeated IDs are import copies and count once."
+},
+{
+"source_table": "registration_history.csv",
+"field": "registration_id",
+"data_type": "text",
+"meaning": "Stable registration key joining registrations, status history and check-ins. Empty for people without a registration."
+},
+{
+"source_table": "registration_history.csv",
+"field": "person_id",
+"data_type": "text",
+"meaning": "Stable identity key. Preserved from earlier core attendance records or L-prefixed for new unregistered interested people."
+},
+{
+"source_table": "registration_history.csv",
+"field": "campaign_id",
+"data_type": "text",
+"meaning": "Stable campaign key. In registrations this is the recorded acquisition source; in interactions it is the action context. Empty on check-ins means unattributed."
+},
+{
+"source_table": "registration_history.csv",
+"field": "owner_id",
+"data_type": "text",
+"meaning": "Stable owner key matching the shared team dictionary."
+},
+{
+"source_table": "checkins.csv",
+"field": "person_name",
+"data_type": "text",
+"meaning": "Synthetic natural full-name display label. Names can repeat; person_id is the identity key."
+},
+{
+"source_table": "checkins.csv",
+"field": "campaign_name",
+"data_type": "text",
+"meaning": "Readable campaign label. campaign_id is the stable campaign key."
+},
+{
+"source_table": "checkins.csv",
+"field": "owner_name",
+"data_type": "text",
+"meaning": "Readable synthetic owner label. owner_id is the stable owner key."
+},
+{
+"source_table": "checkins.csv",
+"field": "occurred_at",
+"data_type": "datetime",
+"meaning": "When this identified engagement action or admission observation occurs, as an ISO8601 IST timestamp. Filter it at or before the selected end of day."
+},
+{
+"source_table": "checkins.csv",
+"field": "result",
+"data_type": "text",
+"meaning": "admitted, denied or pending. Only admitted+verified records establish a verified admission."
+},
+{
+"source_table": "checkins.csv",
+"field": "verification",
+"data_type": "text",
+"meaning": "verified or unverified. Pending/unverified observations do not by themselves establish actual attendance."
+},
+{
+"source_table": "checkins.csv",
+"field": "source",
+"data_type": "text",
+"meaning": "scanner or manual. Manual records can add visitors or overlap scanner records."
+},
+{
+"source_table": "checkins.csv",
+"field": "event_id",
+"data_type": "text",
+"meaning": "Stable admission-event ID. Exact repeated IDs are import copies and count once. Multiple different admission events can belong to one visitor."
+},
+{
+"source_table": "checkins.csv",
+"field": "person_id",
+"data_type": "text",
+"meaning": "Stable identity key. Preserved from earlier core attendance records or L-prefixed for new unregistered interested people."
+},
+{
+"source_table": "checkins.csv",
+"field": "registration_id",
+"data_type": "text",
+"meaning": "Stable registration key joining registrations, status history and check-ins. Empty for people without a registration."
+},
+{
+"source_table": "checkins.csv",
+"field": "campaign_id",
+"data_type": "text",
+"meaning": "Stable campaign key. In registrations this is the recorded acquisition source; in interactions it is the action context. Empty on check-ins means unattributed."
+},
+{
+"source_table": "checkins.csv",
+"field": "owner_id",
+"data_type": "text",
+"meaning": "Stable owner key matching the shared team dictionary."
+}
+]
