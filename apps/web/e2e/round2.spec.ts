@@ -74,8 +74,29 @@ test('B5 reserve gate and B4 final holdout are shown as distinct decisions', asy
   await page.getByLabel('gate forecast_extra_visitors').fill('30');
   await page.getByLabel('gate forecast_visitor_cost_inr').fill('140');
   await expect(page.getByTestId('gate-decision')).toContainText('Hold reserve');
+  // a passing forecast alone never releases: the main B5 readout must be complete, sufficiently sampled and free of a hard breach
   await page.getByLabel('gate forecast_extra_visitors').fill('45');
+  await expect(page.getByTestId('gate-decision')).not.toContainText('Release reserve');
+  await expect(page.getByTestId('gate-decision')).toContainText('Insufficient evidence');
+  await page.getByLabel('kpi numerator').fill('50');
+  await page.getByLabel('kpi denominator').fill('500');
+  await page.getByLabel('guardrail confirmation_pct').fill('70');
+  await page.getByLabel('guardrail marginal_visitor_cost_inr').fill('150');
+  await expect(page.getByTestId('gate-decision')).toContainText('Hold reserve'); // hard confirmation breach
+  await page.getByLabel('guardrail confirmation_pct').fill('90');
   await expect(page.getByTestId('gate-decision')).toContainText('Release reserve');
+  await page.getByLabel('gate forecast_visitor_cost_inr').fill('-1');
+  await expect(page.getByTestId('readout-invalid')).toContainText('cannot be negative');
+  await expect(page.getByTestId('readout-save')).toBeDisabled();
+});
+
+test('120% reminder opt-in is flagged and cannot be saved; reset keeps the audit trail', async ({ page }) => {
+  await page.goto('/strategy');
+  await page.getByTestId('as-b4_optin-stretch').fill('1.2');
+  await expect(page.getByTestId('assumption-invalid')).toContainText('between 0 and 1');
+  await expect(page.getByTestId('save-assumptions')).toBeDisabled();
+  await page.getByTestId('as-b4_optin-stretch').fill('0.8');
+  await expect(page.getByTestId('assumption-invalid')).toHaveCount(0);
 });
 
 test('every experiment form exposes its typed guardrail inputs; B5 confirmation below the 75% hard floor is Stop and holds the reserve', async ({ page }) => {
@@ -123,6 +144,7 @@ test('shared-demo banner is visible', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByTestId('shared-demo-banner')).toContainText('Shared demo');
   await expect(page.getByTestId('shared-demo-banner')).toContainText('Reset');
+  await expect(page.getByTestId('shared-demo-banner')).toContainText('edits are visible to everyone');
 });
 
 test.describe('mobile 390px', () => {

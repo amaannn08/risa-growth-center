@@ -117,7 +117,7 @@ describe('server-issued evidence refs (P1-3)', () => {
     expect(items[2].verified).toBe(false); expect(items[2].ref ?? null).toBeNull(); expect(d.evidence_unverified).toBe(1);
     const res = await confirmDraft(db, d.draft_id);
     const row = (await db.query('SELECT evidence FROM tasks WHERE id=$1', [Number(res.id)]))[0] as any;
-    expect(row.evidence.as_of).toBe('2025-04-12'); // wrapper date = the verified items' own run date (never the 20 Apr page date)
+    expect(row.evidence.as_of).toBeNull(); // one item is unverified: no wrapper date/revision is inherited by anything (round 4); the verified item keeps its own ref date
     expect(row.evidence.items[0].ref).toMatchObject({ asOf: '2025-04-12' });
     expect(JSON.stringify(row.evidence)).not.toContain('2025-04-20');
   });

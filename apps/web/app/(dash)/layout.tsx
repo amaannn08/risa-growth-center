@@ -16,7 +16,7 @@ export default async function DashLayout({ children }: { children: React.ReactNo
         <Suspense><Nav /></Suspense>
       </aside>
       <CopilotDock>
-          <div data-testid="shared-demo-banner" role="note" className="border-b border-amber-200 bg-amber-50 px-4 py-1.5 text-xs text-amber-900">Shared demo — any visitor&apos;s edits are visible to others; use <b>Reset</b> to restore the original dataset.</div>
+          <div data-testid="shared-demo-banner" role="note" className="border-b border-amber-200 bg-amber-50 px-4 py-1.5 text-xs text-amber-900">Shared demo: <b>edits are visible to everyone</b> using this link, and <b>Reset</b> restores the original dataset for everyone (the audit log is kept).</div>
           <Suspense><TopBar rev={meta.data_revision} edits={meta.edits_since_reset} covStart={coverageStart(ds)} covEnd={coverageEnd(ds)} /></Suspense>
           <main className="min-w-0 p-4">{children}</main>
       </CopilotDock>

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import {
-  KNOWN_MISSING, UNATTR, attendanceByDay, calc, dataQuality, diagnose, istDate, mode, recommendCampaigns, scoreBets, showUpByRegistrationWeek,
+  KNOWN_MISSING, UNATTR, assumptionError, attendanceByDay, calc, dataQuality, diagnose, istDate, mode, recommendCampaigns, scoreBets, showUpByRegistrationWeek,
   snapshot, targetsView, weekdayMon0, whatIfShift, projectVisitors, strategyModel, lookup, addDays, diffDays, ratio,
   type Attribution, type GroupMetrics, type Snapshot,
 } from '@gc/core';
@@ -11,6 +11,7 @@ import { buildEvidence, callEvidence } from './evidence';
 // ---------- shared schemas ----------
 const AsOf = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD').optional().describe('As-of date YYYY-MM-DD (IST end of day). Defaults to the conversation context date.');
 const AttributionZ = z.enum(['first_touch', 'registration_source', 'checkin_source']).optional().describe('Attribution view; default first_touch');
+const Checkpoint = z.enum(['event_close', 'data_close', 'day_1']).optional().describe("Named event checkpoint instead of a date: event_close (last event day), data_close (end of the dataset), day_1 (first event day). Resolved server-side to an explicit date and echoed back as `checkpoint`.");
 const CampaignId = z.string().optional().describe("Campaign id (C01..C07), campaign name (case-insensitive, e.g. 'Paid Social'), or 'unattributed'");
 
 export interface ToolSpec { name: string; description: string; schema: z.ZodObject<any>; mutating?: boolean; run: (env: ToolEnv, args: any) => Promise<any> | any }
@@ -46,8 +47,10 @@ async function resolveOwner(env: ToolEnv, v?: string | null): Promise<string | u
   return hit.owner_id;
 }
 
+/** Named checkpoints → explicit dates (the same mapping for every tool and the prompt). */
+export const checkpointDates = (env: Pick<ToolEnv, 'ds' | 'covEnd'>) => ({ event_close: istDate(env.ds.eventMs.endsAt), data_close: env.covEnd, day_1: istDate(env.ds.eventMs.startsAt) });
 const meta = (env: ToolEnv, tool: string, as_of: string | null, units: Record<string, string>, attribution?: Attribution) => ({
-  tool, as_of, data_revision: env.meta.data_revision, ...(attribution ? { attribution } : {}), units,
+  tool, as_of, data_revision: env.meta.data_revision, ...(attribution ? { attribution } : {}), units, checkpoint_dates: checkpointDates(env),
 });
 const pct2 = (f: number | null | undefined) => (f === null || f === undefined ? null : `${(f * 100).toFixed(2)}%`);
 const step = (label: string, rate: number | null, numerator: number | null, denominator: number | null, note?: string) =>
@@ -82,12 +85,26 @@ function stageBlock(m: GroupMetrics) {
   };
 }
 
+/** Dated verification split of external check-ins: attempts vs verified admissions per source, with explicit event AND people denominators (events and people are different units). */
+function sourceSplit(env: ToolEnv, date: string) {
+  const day = env.ds.checkins.filter((r) => istDate((r as any).t) === date && env.ds.externalIds.has(r.person_id));
+  const ok = (r: any) => r.result === 'admitted' && r.verification === 'verified';
+  const by = (src: string) => day.filter((r) => r.source === src);
+  const ppl = (rows: any[]) => new Set(rows.map((r) => r.person_id)).size;
+  const sc = by('scanner'), mn = by('manual');
+  return {
+    scanner_attempt_events: sc.length, scanner_verified_admission_events: sc.filter(ok).length, scanner_attempt_people: ppl(sc), scanner_verified_people: ppl(sc.filter(ok)),
+    manual_attempt_events: mn.length, manual_verified_admission_events: mn.filter(ok).length, manual_verified_people: ppl(mn.filter(ok)),
+    all_attempt_events: day.length, all_attempt_people: ppl(day),
+  };
+}
+
 // ---------- tool specs ----------
 export const TOOLS: ToolSpec[] = [
   {
     name: 'get_funnel',
     description: 'Funnel for the whole event or one campaign as of a date: platform observations (reach, impressions, clicks, sessions, starts) separated from unique-people stages (identified → engaged → registered → confirmed → verified visitors), step rates with numerator/denominator, registered and confirmed show-up, walk-ins, net spend and CPA, and the target in effect with progress (overall only). Works for ANY as_of date, so use it for status counts (interested/confirmed/cancelled/waitlisted in status_by_person), show-up, spend, CPA and "what moved between two dates" questions.',
-    schema: z.object({ as_of: AsOf, campaign_id: CampaignId, attribution: AttributionZ }),
+    schema: z.object({ as_of: AsOf, checkpoint: Checkpoint, campaign_id: CampaignId, attribution: AttributionZ }),
     run: (env, a) => {
       const asOf = resolveAsOf(env, a.as_of), attr = attrOf(env, a.attribution), cid = resolveCampaign(env, a.campaign_id ?? env.context.campaignId);
       const snap = snapshot(env.ds, asOf);
@@ -111,13 +128,18 @@ export const TOOLS: ToolSpec[] = [
       if (attr === 'checkin_source') {
         return { ...base, scope: cid, campaign_name: v.campaign_name, checkin_source: view, note: 'Check-in source attributes each visitor to the campaign on their earliest verified admission.' };
       }
-      return { ...base, scope: cid, campaign_name: v.campaign_name, ...stageBlock(view as GroupMetrics), note: 'Attribution is observational, not causal.' };
+      const o = snap.overall;
+      // the programme-level values at the SAME date, so "vs the programme" comparisons are quotable from this very call (scope: overall)
+      const programme_reference = { scope: 'overall (programme)', registered_show_up: o.rates.registered_show_up, registered_show_up_pct: pct2(o.rates.registered_show_up), confirmed_show_up: o.rates.confirmed_show_up, confirmed_show_up_pct: pct2(o.rates.confirmed_show_up),
+        registered_people: o.registered_people, confirmed_people: o.confirmed_people, registered_and_attended_people: o.registered_and_attended_people, confirmed_and_attended_people: o.confirmed_and_attended_people, visitors_unique_verified: o.attended_people,
+        net_spend_inr: o.marketing_spend_inr, cpa_per_visitor_inr: o.rates.cpa_per_attendee_inr, cpa_per_registration_inr: o.rates.cpa_per_registration_inr };
+      return { ...base, scope: cid, campaign_name: v.campaign_name, ...stageBlock(view as GroupMetrics), programme_reference, note: 'Attribution is observational, not causal. programme_reference holds the OVERALL values at the same date for comparison; the other fields are this campaign only.' };
     },
   },
   {
     name: 'get_targets',
     description: 'Targets: the version in effect at the as-of date (launch plan until 14 Mar, revised from 15 Mar 09:00 IST), all versions, progress vs each goal (actual, goal, gap, fraction) and budget headroom.',
-    schema: z.object({ as_of: AsOf }),
+    schema: z.object({ as_of: AsOf, checkpoint: Checkpoint }),
     run: (env, a) => {
       const asOf = resolveAsOf(env, a.as_of);
       const t = targetsView(env.ds, asOf);
@@ -128,7 +150,7 @@ export const TOOLS: ToolSpec[] = [
     name: 'compare_campaigns',
     description: 'Rank campaigns on one metric (attribution view selectable). Returns value with numerator/denominator, status and Scale/Change/Stop recommendation. Attribution is observational: say so. Excludes Unattributed and null values.',
     schema: z.object({
-      as_of: AsOf,
+      as_of: AsOf, checkpoint: Checkpoint,
       metric: z.enum(['visitor_cpa', 'registration_cpa', 'registered_show_up', 'confirmed_show_up', 'registrations', 'visitors', 'confirmed_no_shows', 'ctr', 'registered_per_identified', 'confirmed_per_registered', 'net_spend']),
       attribution: AttributionZ, order: z.enum(['asc', 'desc']).optional(), campaign_ids: z.array(z.string()).optional(),
     }),
@@ -305,29 +327,29 @@ export const TOOLS: ToolSpec[] = [
   },
   {
     name: 'get_spend_ledger',
-    description: 'Net marketing spend (credits are negative postings), gross positive spend, the list of credits, and headroom vs the budget cap at an as-of date; also net at event close and data close checkpoints. Use for spend / budget / credit questions.',
-    schema: z.object({ campaign_id: CampaignId, from: AsOf, through: AsOf, only_credits: z.boolean().optional() }),
+    description: 'Net marketing spend (credits are negative postings), gross positive spend, the list of credits, and EVENT-WIDE headroom vs the budget cap at the through date; the range (from/through) bounds the totals AND the credits list; also net at event close and data close checkpoints. Use for spend / budget / credit questions.',
+    schema: z.object({ campaign_id: CampaignId, from: AsOf, through: AsOf, checkpoint: Checkpoint, only_credits: z.boolean().optional() }),
     run: (env, a) => {
       const through = resolveAsOf(env, a.through), from = a.from ? resolveAsOf(env, a.from) : env.covStart;
       const cid = resolveCampaign(env, a.campaign_id);
       const rows = env.ds.daily.filter((r) => (!cid || (cid === UNATTR ? r.campaign_id === null : r.campaign_id === cid)));
       const inRange = rows.filter((r) => r.activity_date >= from && r.activity_date <= through);
-      const credits = rows.filter((r) => r.marketing_spend_inr < 0 && r.activity_date <= through).map((r) => ({ activity_id: r.activity_id, date: r.activity_date, campaign_id: r.campaign_id, campaign: env.ds.campaigns[r.campaign_id ?? '']?.campaign_name, amount: r.marketing_spend_inr }));
+      const credits = rows.filter((r) => r.marketing_spend_inr < 0 && r.activity_date >= from && r.activity_date <= through).map((r) => ({ activity_id: r.activity_id, date: r.activity_date, campaign_id: r.campaign_id, campaign: env.ds.campaigns[r.campaign_id ?? '']?.campaign_name, amount: r.marketing_spend_inr }));
       const netAt = (d: string) => rows.filter((r) => r.activity_date <= d).reduce((s, r) => s + r.marketing_spend_inr, 0);
       const cap = (d: string) => { const t = snapshot(env.ds, d, false).target; return t ? Number(t.marketing_budget_inr) : null; };
-      const cp = (label: string, d: string) => { const c = cap(d), n = snapshot(env.ds, d, false).overall.marketing_spend_inr; return { label, date: d, net_spend_inr: cid ? netAt(d) : n, event_net_spend_overall_inr: n, cap_inr: c, headroom_inr: c === null ? null : c - n }; };
+      const cp = (label: string, d: string) => { const c = cap(d), n = snapshot(env.ds, d, false).overall.marketing_spend_inr; return { label, date: d, net_spend_inr: cid ? netAt(d) : n, event_net_spend_overall_inr: n, event_wide_cap_inr: c, event_wide_headroom_inr: c === null ? null : c - n }; };
       const eventClose = istDate(env.ds.eventMs.endsAt);
       const credit_list = a.only_credits ? credits : credits;
       return {
         ...meta(env, 'get_spend_ledger', through, { spend: 'INR' }),
-        scope: cid ?? 'overall', range: { from, through },
+        scope: cid ?? 'overall', range: { from, through, cumulative: from === env.covStart },
         net_spend_inr: inRange.reduce((s, r) => s + r.marketing_spend_inr, 0),
         gross_positive_spend_inr: inRange.reduce((s, r) => s + Math.max(0, r.marketing_spend_inr), 0),
         credits_total_inr: inRange.reduce((s, r) => s + Math.min(0, r.marketing_spend_inr), 0),
         credits: credit_list,
-        cap_inr: cap(through), headroom_inr: (() => { const c = cap(through); return c === null ? null : c - snapshot(env.ds, through, false).overall.marketing_spend_inr; })(),
+        event_wide_cap_inr: cap(through), event_wide_headroom_inr: (() => { const c = cap(through); return c === null ? null : c - snapshot(env.ds, through, false).overall.marketing_spend_inr; })(),
         checkpoints: [cp('event close', eventClose), cp('data close', env.covEnd)],
-        note: 'Net spend includes credits (negative postings). Headroom is overall net spend vs the target-version cap in effect.',
+        note: 'Net spend, gross spend, credits_total_inr and the credits list cover the stated range (and the stated campaign scope). Headroom is EVENT-WIDE: overall net spend at the through date vs the target-version cap in effect, never one campaign\'s headroom. Checkpoint rows give the figures at event close and data close.',
       };
     },
   },
@@ -341,11 +363,11 @@ export const TOOLS: ToolSpec[] = [
       const snap = snapshot(env.ds, env.covEnd);
       return {
         ...meta(env, 'get_attendance', env.covEnd, { people: 'unique external people', events: 'verified admission events' }),
-        by_day: Object.entries(days).map(([date, d]) => ({ date, weekday: new Date(date + 'T00:00:00Z').toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' }), events: d.external_verified_admission_events, distinct_visitors: d.unique_external_visitors_on_day, new: d.new_unique_external_visitors_since_prior_days, returning: d.returning_unique_external_visitors })),
+        by_day: Object.entries(days).map(([date, d]) => ({ date, weekday: new Date(date + 'T00:00:00Z').toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' }), events: d.external_verified_admission_events, distinct_visitors: d.unique_external_visitors_on_day, new: d.new_unique_external_visitors_since_prior_days, returning: d.returning_unique_external_visitors, ...sourceSplit(env, date) })),
         unique_visitors_total: snap.overall.attended_people,
         walk_ins_attended_without_registration: snap.overall.attended_unregistered_people,
         verification_sources_external_people: dq.verification_sources_external_people,
-        note: 'scanner_total counts people with ≥1 scanner verification; manual_only are people verified only by manual entry.',
+        note: 'scanner_total counts people with ≥1 scanner verification; manual_only are people verified only by manual entry. by_day carries the dated scanner/manual split: scanner_verified_admission_events / scanner_attempt_events is the scanner verification rate in EVENTS; the people columns are a different denominator (people are not events; a person can appear in both sources).',
       };
     },
   },
@@ -424,7 +446,7 @@ export const TOOLS: ToolSpec[] = [
   {
     name: 'get_projection',
     description: 'HISTORICAL event-end forecast shown on the Overview page: low/mid/high projected unique verified visitors (and registrations) at event close, computed as of a past date from active campaigns\' trailing 7/14/28-day registration rates × show-up assumptions + walk-ins, with current registrations, days left, per-campaign status (paused/stopped campaigns add nothing) and assumptions. Use for "will we hit / what is the forecast / projected visitors for the event" and for "what does pausing X do to the forecast". Observed actuals are never changed. NOT the next-edition plan (use get_strategy_model for that).',
-    schema: z.object({ as_of: AsOf }),
+    schema: z.object({ as_of: AsOf, checkpoint: Checkpoint }),
     run: (env, a) => {
       const asOf = resolveAsOf(env, a.as_of);
       const p = projectVisitors(env.ds, asOf, env.assumptions);
@@ -478,6 +500,9 @@ export const TOOLS: ToolSpec[] = [
       if (a.kind === 'assumption_change') {
         if (!a.assumption_key || a.assumption_value === undefined) throw new ToolError('MISSING_ARGS', 'assumption_key and assumption_value are required', 'Call get_strategy_model to see assumption keys.');
         if (!env.assumptions.some((x) => x.key === a.assumption_key)) throw new ToolError('UNKNOWN_ASSUMPTION', `No assumption ${a.assumption_key}`, `Keys: ${[...new Set(env.assumptions.map((x) => x.key))].join(', ')}`);
+        const target = env.assumptions.find((x) => x.key === a.assumption_key)!;
+        const invalid = assumptionError(target, a.assumption_value);
+        if (invalid) throw new ToolError('INVALID_ASSUMPTION', invalid, 'Shares (opt-in, holdout, show-up) are fractions between 0 and 1.');
         const changed = env.assumptions.map((x) => (x.key === a.assumption_key ? { ...x, value: a.assumption_value! } : x));
         const before = liveStrategy(env), after = liveStrategy(env, changed);
         return {
@@ -538,7 +563,7 @@ export const TOOLS: ToolSpec[] = [
       title: z.string().min(3).max(200), description: z.string().max(2000).optional(), campaign_id: z.string().optional(), owner_id: z.string().optional(),
       due_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), priority: z.enum(['p0', 'p1', 'p2']), experiment_id: z.number().int().optional(), bet_id: z.string().optional(),
       insight_id: z.string().optional(),
-      evidence: z.array(z.object({ tool: z.string(), metric: z.string(), value: z.union([z.number(), z.string()]) })),
+      evidence: z.array(z.object({ tool: z.string(), metric: z.string(), value: z.union([z.number(), z.string()]), call_id: z.string().optional().describe('toolCallId of the tool run that produced the figure'), field: z.string().optional().describe('path of the field in that run\'s output, e.g. credits_total_inr'), as_of: z.string().optional().describe('date or checkpoint the figure is about') })).describe('Each item is one figure bound to its exact tool run; the saved card shows the tool\'s own value, unit, sign and date. Items whose figure, sign, unit or scope do not match the cited field are saved as unverified.'),
     }),
     run: async (env, a) => {
       const cid = resolveCampaign(env, a.campaign_id);
@@ -561,7 +586,7 @@ export const TOOLS: ToolSpec[] = [
     mutating: true,
     schema: z.object({
       campaign_id: z.string(), status: z.enum(['active', 'paused', 'stopped']).optional(), plan_budget_inr: z.number().int().min(0).max(300000).optional(), reason: z.string().max(500),
-      evidence: z.array(z.object({ tool: z.string(), metric: z.string(), value: z.union([z.number(), z.string()]) })),
+      evidence: z.array(z.object({ tool: z.string(), metric: z.string(), value: z.union([z.number(), z.string()]), call_id: z.string().optional().describe('toolCallId of the tool run that produced the figure'), field: z.string().optional().describe('path of the field in that run\'s output, e.g. credits_total_inr'), as_of: z.string().optional().describe('date or checkpoint the figure is about') })).describe('Each item is one figure bound to its exact tool run; the saved card shows the tool\'s own value, unit, sign and date. Items whose figure, sign, unit or scope do not match the cited field are saved as unverified.'),
     }),
     run: async (env, a) => {
       const cid = resolveCampaign(env, a.campaign_id);
@@ -590,10 +615,17 @@ export async function runTool(env: ToolEnv, name: string, rawArgs: unknown, tool
 async function runToolRaw(env: ToolEnv, name: string, rawArgs: unknown): Promise<any> {
   const spec = toolByName(name);
   if (!spec) return { tool: name, data_revision: env.meta.data_revision, error: { code: 'UNKNOWN_TOOL', message: `No tool named ${name}`, hint: `Tools: ${TOOL_NAMES.join(', ')}` } };
-  const parsed = spec.schema.safeParse(rawArgs ?? {});
+  const args: any = rawArgs && typeof rawArgs === 'object' ? { ...(rawArgs as object) } : {};
+  const cp = args.checkpoint;
+  if (cp !== undefined && 'checkpoint' in spec.schema.shape) {
+    const d = (checkpointDates(env) as Record<string, string>)[cp];
+    if (d) { const key = 'through' in spec.schema.shape ? 'through' : 'as_of'; if (!args[key]) args[key] = d; }
+  }
+  const parsed = spec.schema.safeParse(args);
   if (!parsed.success) return { tool: name, data_revision: env.meta.data_revision, error: { code: 'BAD_ARGUMENTS', message: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '), hint: 'Dates are YYYY-MM-DD; fix the arguments and retry.' } };
   try {
-    return await spec.run(env, parsed.data);
+    const res = await spec.run(env, parsed.data);
+    return res && typeof res === 'object' && (parsed.data as any).checkpoint ? { ...res, checkpoint: { name: (parsed.data as any).checkpoint, date: (checkpointDates(env) as any)[(parsed.data as any).checkpoint] } } : res;
   } catch (e: any) {
     if (e instanceof ToolError) return { tool: name, data_revision: env.meta.data_revision, error: { code: e.code, message: e.message, hint: e.hint ?? '' } };
     return { tool: name, data_revision: env.meta.data_revision, error: { code: 'INTERNAL', message: String(e?.message ?? e), hint: 'Retry or use another tool.' } };

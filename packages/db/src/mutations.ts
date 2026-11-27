@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { adjudicateExperiment, normalizeEvidence, validateObservation } from '@gc/core';
+import { adjudicateExperiment, assumptionError, effectiveSample, normalizeEvidence, validateObservation } from '@gc/core';
 import type { Db, Q } from './client';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { nextUserN } from './ids';
@@ -364,10 +364,10 @@ async function readoutTx(q: Q, id: number, input: unknown): Promise<Change> {
   if (check.errors.length) bad('VALIDATION', check.errors.join(' '));
   const observed = check.value;
   const ev = adjudicateExperiment({ ...e, scale_value: e.scale_value === null ? null : Number(e.scale_value), stop_value: e.stop_value === null ? null : Number(e.stop_value) },
-    { observed_value: observed, observed_n: v.observed_n, guardrail_observations: v.guardrail_observations, gate_inputs: v.gate_inputs });
+    { observed_value: observed, observed_n: v.observed_n, kpi_numerator: v.kpi_numerator, kpi_denominator: v.kpi_denominator, guardrail_observations: v.guardrail_observations, gate_inputs: v.gate_inputs });
   const status = ({ scale: 'scaled', change: 'changed', stop: 'stopped', insufficient_sample: 'readout' } as const)[ev.decision];
   const observation = { kpi_numerator: v.kpi_numerator ?? null, kpi_denominator: v.kpi_denominator ?? null, guardrail_observations: ev.guardrails.map((g) => ({ key: g.key, label: g.label, op: g.op, threshold: g.value, observed: g.observed, passed: g.passed, hard: !!g.hard })), gates: ev.gates, missing: ev.missing, reasons: ev.reasons };
-  const after = await updateRow(q, 'experiments', { id }, { observed_value: observed, observed_n: v.observed_n ?? null, decision: ev.decision, status, observation });
+  const after = await updateRow(q, 'experiments', { id }, { observed_value: observed, observed_n: effectiveSample(e, v) ?? null, decision: ev.decision, status, observation });
   return { id: String(id), before, after, result_ref: `experiment:${id}` };
 }
 export const recordReadout = (db: Db, id: number, input: unknown, actor: Actor = 'user') => run(db, actor, 'experiments', 'update', (q) => readoutTx(q, id, input));
@@ -393,6 +393,8 @@ export const upsertAssumption = (db: Db, input: unknown, actor: Actor = 'user') 
   return run(db, actor, 'plan_assumptions', 'update', async (q) => {
     const before = (await q.query('SELECT * FROM plan_assumptions WHERE key=$1 AND scenario=$2::scenario', [v.key, v.scenario]))[0];
     if (!before) bad('NOT_FOUND', `Assumption ${v.key} (${v.scenario}) does not exist`);
+    const invalid = assumptionError({ key: v.key, unit: (before as any).unit }, v.value);
+    if (invalid) bad('VALIDATION', invalid);
     const after = (await q.query('UPDATE plan_assumptions SET value=$3 WHERE key=$1 AND scenario=$2::scenario RETURNING *', [v.key, v.scenario, v.value]))[0];
     return { id: `${v.key}:${v.scenario}`, before, after };
   });

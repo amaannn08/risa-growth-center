@@ -25,6 +25,15 @@ export async function loadRawDataset(q: Q): Promise<RawInput> {
   return Object.fromEntries(keys.map((k, i) => [k, res[i]])) as unknown as RawInput;
 }
 
+/** Export payload: revision metadata and every raw table read in ONE snapshot transaction (the revision always describes the contents). `hook` runs between the two reads (tests use it to force a concurrent write). */
+export async function exportSnapshot(db: Db, hook?: () => Promise<void>): Promise<{ meta: Meta; tables: RawInput }> {
+  return withSnapshot(db, async (q) => {
+    const meta = await getMeta(q);
+    if (hook) await hook();
+    return { meta, tables: await loadRawDataset(q) };
+  });
+}
+
 export interface Meta { data_revision: number; dataset_revision: number; edits_since_reset: number; seeded_at: string | null; source_sha256: string | null }
 export async function getMeta(q: Q): Promise<Meta> {
   const [m] = await q.query<Meta>('SELECT data_revision, dataset_revision, edits_since_reset, seeded_at::text AS seeded_at, source_sha256 FROM app_meta WHERE id=1');

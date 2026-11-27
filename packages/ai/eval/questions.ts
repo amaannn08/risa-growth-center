@@ -1,5 +1,5 @@
 /**
- * 59 eval items: 34 original (plan §10) + 20 independent red-team questions from the round-1 grader review (ids 35–54, with their verified answers) + 1 live-LLM clarification probe (id 55)
+ * 65 eval items (59 below + 6 round-4 regression cases, ids 60–65): 34 original (plan §10) + 20 independent red-team questions from the round-1 grader review (ids 35–54, with their verified answers) + 1 live-LLM clarification probe (id 55)
  * + 4 round-3 regression cases for the deployed-eval misses and review findings (ids 56–59: weekly cutoff series, paused-campaign wording, same-message draft, resolved clarification follow-up). Each item has:
  *  - `calls`: deterministic tool calls used by test/tools.test.ts (no LLM) — they prove the ground truth independently of the model;
  *  - `tools`: any-of tools the LLM is expected to call (eval runner);
@@ -97,7 +97,7 @@ export const ITEMS: EvalItem[] = [
     must: ['2.11', '3.51'], source: 'engine re-derivation: clicks/impressions C02 0.02108427, C06 0.03514517 (observations, directional)' },
   { id: 33, q: 'What attendance will we get if we double paid budget next year?', tools: ['what_if', 'get_strategy_model'],
     calls: [{ tool: 'what_if', args: { kind: 'budget_shift', from_campaign_id: 'C06', to_campaign_id: 'C02', amount_inr: 10000, method: 'diminishing', as_of: '2025-04-20' } }],
-    must: ['/scenario|assumption|projection|estimate/i', '/unmeasured|not measured|cannot be measured|no evidence|diminishing|uncertain/i'], mustNot: ['/\\bwill (get|reach|attract|bring)\\b/i'], source: 'marginal returns unmeasured; scenario only' },
+    must: ['/scenario|assumption|projection|estimate/i', '/unmeasured|not measured|cannot be measured|cannot measure|can.?t measure|no evidence|diminishing|uncertain/i'], mustNot: ['/\\bwill (get|reach|attract|bring)\\b/i'], source: 'marginal returns unmeasured; scenario only' },
   { id: 34, q: 'How did the campaign do?', tools: ['get_funnel'], calls: [{ tool: 'get_funnel', args: {} }],
     must: ['2,050', '/20 Apr|2025-04-20|data close|as of|overall/i'], source: 'ambiguous: defaults to overall at the as-of date' },
 ];
@@ -172,5 +172,24 @@ RED_TEAM.push(
     must: ['11,200', '/tie|tied|same|equal|neither|both/i'], mustNot: ['/which (campaigns|two)|what (measure|metric)/i'], source: 'round-2 review Q10: a fully resolved follow-up (pair from the thread, measure = spend, date given) must not be re-asked; C06 and C07 tie at ₹11,200' },
 );
 ITEMS.push(...RED_TEAM);
+
+// ---------- round 4: regression cases (ids 60–65) ----------
+ITEMS.push(
+  { id: 60, q: 'Signed net spend only from 16 to 18 April 2025, with each contributing campaign.', tools: ['get_spend_ledger'], calls: [{ tool: 'get_spend_ledger', args: { from: '2025-04-16', through: '2025-04-18' } }],
+    must: ['2,500', '2,000', '500', '/Creator|C03/i', '/Referral|C05/i'], mustNot: ['3,000', '1,000'], source: 'round-3 review A8: ranged ledger returns only credits inside the range (−2,000 C03 on 16 Apr, −500 C05 on 18 Apr); the earlier −1,000/−3,000 credits of 10 Apr are outside it; sign stays negative' },
+  { id: 61, q: 'At event close, compare gross and net cost per unique visitor, with the signed ledger totals.', tools: ['get_spend_ledger', 'get_funnel'],
+    calls: [{ tool: 'get_spend_ledger', args: { checkpoint: 'event_close' } }, { tool: 'get_funnel', args: { checkpoint: 'event_close' } }, { tool: 'calculate', args: { expression: '280500/2050' } }, { tool: 'calculate', args: { expression: '276500/2050' } }],
+    must: ['280,500', '4,000', '276,500', '2,050', '136.83', '134.88'], mustNot: ['3.17'], source: 'round-3 review A11: "event close" is 13 Apr (gross ₹280,500, credits −₹4,000, net ₹276,500, 2,050 visitors → ₹136.83 / ₹134.88), never the 20 Apr data-close ledger' },
+  { id: 62, q: 'Compare cumulative Paid Social spend on 23 Feb and 2 Mar within the same channel.', tools: ['get_funnel', 'get_spend_ledger', 'compare_campaigns'],
+    calls: [{ tool: 'get_funnel', args: { campaign_id: 'C02', as_of: '2025-02-23' } }, { tool: 'get_funnel', args: { campaign_id: 'C02', as_of: '2025-03-02' } }, { tool: 'calculate', args: { expression: '52800-38400' } }],
+    must: ['38,400', '52,800', '14,400'], mustNot: ['/which (campaigns|two)|what (measure|metric)/i'], source: 'round-3 review A6: one subject at two dates is a time comparison, not a request for a second campaign' },
+  { id: 63, q: 'How much has Community Groups spent through 26 March 2025, and how much budget headroom remains?', tools: ['get_spend_ledger'], calls: [{ tool: 'get_spend_ledger', args: { campaign_id: 'C07', through: '2025-03-26' } }],
+    must: ['12,800', '75,200', '/event-wide|portfolio|overall|programme/i'], source: 'round-3 review A1: ₹75,200 is EVENT-WIDE headroom (cap − overall net spend), never Community Groups\' own headroom' },
+  { id: 64, q: 'Saturday scanner verification rate beside all-method unique visitors. Can manual events be subtracted to get scanner-only people?', tools: ['get_attendance'],
+    calls: [{ tool: 'get_attendance', args: {} }, { tool: 'calculate', args: { expression: '1710/1760*100' } }],
+    must: ['1,710', '1,760', '97.16', '/1,430|2,050/'], source: 'round-3 review A16: get_attendance.by_day exposes dated scanner attempts and verified admissions (events) next to people denominators: 1,710 / 1,760 = 97.16% in events; 1,430 distinct visitors is a people count' },
+  { id: 65, q: 'On day 1 of the event, how many unique verified visitors were there?', tools: ['get_funnel', 'get_attendance'], calls: [{ tool: 'get_funnel', args: { checkpoint: 'day_1' } }],
+    must: ['1,430', '/12 Apr|2025-04-12/i'], source: 'named checkpoint "day 1" resolves to the first event day (2025-04-12), not the page date' },
+);
 
 export const itemById = (id: number) => ITEMS.find((i) => i.id === id)!;

@@ -47,6 +47,9 @@ export function aiTools(env: ToolEnv, log: ToolLogEntry[]) {
 export function runNative(env: ToolEnv, messages: ModelMessage[], log: ToolLogEntry[], onEnd?: (e: any) => void | Promise<void>) {
   return streamText({
     model: deepseekModel(), instructions: systemPrompt(env), messages, tools: aiTools(env, log) as any,
+    // the first step must call a tool: an answer about the data written from memory (a follow-up restating earlier figures) can never be grounded in this turn.
+    // Questions that need clarification never get here (the deterministic pre-flight guard answers them with no tools).
+    prepareStep: ({ stepNumber }: { stepNumber: number }) => (stepNumber === 0 ? { toolChoice: 'required' as const } : undefined),
     stopWhen: isStepCount(6), temperature: 0.1, maxOutputTokens: 1200, onEnd,
   } as any);
 }

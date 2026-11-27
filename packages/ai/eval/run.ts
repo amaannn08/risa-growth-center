@@ -7,7 +7,7 @@ import { resolve } from 'node:path';
 import { ask, assistantMsg, userMsg } from './client';
 import { ITEMS } from './questions';
 import { scoreAnswer } from './score';
-import { executedFrom, groundingCheck } from '../src/grounding';
+import { groundingFromCalls } from '../src/grounding';
 
 const arg = (k: string, d?: string) => { const i = process.argv.indexOf(`--${k}`); return i > 0 ? process.argv[i + 1] : d; };
 const base = arg('base-url', 'http://localhost:3000')!;
@@ -47,12 +47,14 @@ for (const item of ITEMS.filter((i) => !only || only.includes(i.id))) {
   })();
   // one retry on provider hiccups
   if (last.error && /HTTP 5|unavailable/i.test(last.error)) { history.splice(-1, 1); last = await ask(base, history, item.context ?? {}, `eval-${item.id}`); for (const c of last.tools) outputs.push(c.output); }
-  const g = groundingCheck(last.text, outputs, texts, executedFrom(last.tools.map((t) => ({ name: t.name, output: t.output })))); // citations must reference tools run in THIS turn
+  // the SAME check the UI runs: only this turn's server-issued refs, claims bound to magnitude/unit/sign/scope; `last.text` is the final-step text the UI renders
+  const g = groundingFromCalls(last.text, last.tools.map((t) => t.output?._evidence).filter(Boolean), texts);
   const toolsCalled = last.tools.map((t) => t.name);
   const draftCreated = last.tools.some((t) => t.name === 'propose_task' && t.output?.draft_id);
   const s = scoreAnswer(item, last.text, toolsCalled, g, draftCreated);
-  rows.push({ id: item.id, q: item.q, kind: item.kind ?? 'normal', pass: s.pass && !last.error, tools: toolsCalled, missing: s.missing, forbidden: s.forbidden, grounding: [...g.unmatched, ...g.bad_citations], ms: last.ms, excerpt: last.text.replace(/\s+/g, ' ').slice(0, 260), err: last.error, notes: s.notes });
-  console.log(`#${item.id} ${s.pass && !last.error ? 'PASS' : 'FAIL'}  ${toolsCalled.join(',')}  ${s.missing.length ? 'missing: ' + s.missing.join(' | ') : ''} ${g.unmatched.length ? 'ungrounded: ' + g.unmatched.join(',') : ''} ${last.error ?? ''}`);
+  if (process.env.EVAL_DEBUG && !(s.pass && !last.error)) console.log(`  DEBUG #${item.id}\n  ${last.text.replace(/\n/g, '\n  ')}\n  MISMATCH ${JSON.stringify(g.claim_mismatches)} UNMATCHED ${JSON.stringify(g.unmatched)}`);
+  rows.push({ id: item.id, q: item.q, kind: item.kind ?? 'normal', pass: s.pass && !last.error, tools: toolsCalled, missing: s.missing, forbidden: s.forbidden, grounding: [...g.unmatched, ...g.bad_citations, ...g.claim_mismatches.map((m) => `${m.raw} (${m.reason})`)], ms: last.ms, excerpt: last.text.replace(/\s+/g, ' ').slice(0, 260), err: last.error, notes: s.notes });
+  console.log(`#${item.id} ${s.pass && !last.error ? 'PASS' : 'FAIL'}  ${toolsCalled.join(',')}  ${s.missing.length ? 'missing: ' + s.missing.join(' | ') : ''} ${g.unmatched.length ? 'ungrounded: ' + g.unmatched.join(',') : ''} ${g.claim_mismatches.length ? 'claim mismatch: ' + g.claim_mismatches.map((m) => m.raw).join(',') : ''} ${last.error ?? ''}`);
   if (item.setup?.length) await reset();
 }
 await reset();
@@ -64,7 +66,7 @@ const md = `# Copilot eval report
 
 - Run: ${new Date().toISOString()} · mode \`${mode}\` · model \`${process.env.DEEPSEEK_MODEL ?? 'deepseek-flash'}\` · target ${base.replace(/\/\/.*@/, '//')}
 - **Overall: ${passed}/${rows.length} (${pct(passed, rows.length)})** · refusals ${grp('refusal').filter((r) => r.pass).length}/${grp('refusal').length} · drafts ${grp('draft').filter((r) => r.pass).length}/${grp('draft').length}
-- Scoring per item: any-expected-tool called · every \`must\` figure/phrase present (numbers matched numerically at the expected precision) · no \`mustNot\` · **grounding: 0 untraced figures** · refusals must name the missing data and invent no number · drafts must call \`propose_task\` and never claim creation.
+- Scoring per item: any-expected-tool called · every \`must\` figure/phrase present (numbers matched numerically at the expected precision) · no \`mustNot\` · **grounding: 0 untraced figures, 0 claim mismatches (magnitude, unit, sign, scope), 0 uncited-tool citations** · the same final-answer text the UI renders · refusals must name the missing data and invent no number · drafts must call \`propose_task\` and never claim creation.
 - Deterministic ground truth (no LLM) for all ${ITEMS.length} items lives in \`packages/ai/test/tools.test.ts\`.
 
 | # | Pass | Question | Tools called | Notes |

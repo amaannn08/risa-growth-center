@@ -23,7 +23,7 @@ export interface ScenarioResult {
   reference: { spend: number; registered: number; confirmed: number; visitors: number; campaigns: ReferenceCampaign[] };
   bets: BetResult[];
   /** B4 eligibility chain: confirmed → opted in → minus holdout → treated (never above the requested target) */
-  reminder: { target: number; confirmed: number; optin_rate: number; eligible_optin: number; holdout_share: number; holdout: number; treatable: number; treated: number; waves: number; wave1_pp: number; wave2_pp: number; lift_pp: number; required_eligible: number; required_confirmed: number; feasible: boolean };
+  reminder: { target: number; confirmed: number; optin_rate: number; eligible_optin: number; holdout_share: number; holdout: number; treatable: number; treated: number; waves: number; wave1_pp: number; wave2_pp: number; lift_pp: number; required_eligible: number | null; required_confirmed: number | null; feasible: boolean };
   added_regs: number; added_confirmed: number; acquisition_visitors: number; reminder_visitors: number;
   registrations: number; confirmed: number; registered_visitors: number; show_up_of_registrations: number;
   walkins: number; total: number; headline: number;
@@ -78,14 +78,16 @@ function scenarioResult(as: Assumption[], s: Scenario, history: CampaignHistory[
   ];
   // B4 reminders go only to OPTED-IN confirmed registrants, after the holdout is set aside: treated = min(target, ⌊confirmed × opt-in⌋ × (1 − holdout))
   const confirmedPreB4 = ref.confirmed + rnd(acq.reduce((t, b) => t + b.extra_regs, 0) * g('added_confirm_rate'));
-  const optin = g('b4_optin'), holdoutShare = g('b4_holdout'), target = g('b4_treated');
+  // ratios are clamped to [0, 1] defensively (writes are validated, see assumptionError); a stray value can never produce more eligible people than confirmed
+  const optin = Math.min(1, Math.max(0, g('b4_optin'))), holdoutShare = Math.min(1, Math.max(0, g('b4_holdout'))), target = g('b4_treated');
   const eligibleOptin = Math.floor(confirmedPreB4 * optin + 1e-9), treatable = Math.floor(eligibleOptin * (1 - holdoutShare) + 1e-9);
   const treated = Math.min(target, treatable);
   // two-wave cadence (pre-event + day-of): the 2nd wave raises visits per treated person, never the treated count
   const wave1 = g('b4_lift_pp'), wave2 = g('b4_wave2_pp'), liftPp = wave1 + wave2;
   const reminderInfo = {
     target, confirmed: confirmedPreB4, optin_rate: optin, eligible_optin: eligibleOptin, holdout_share: holdoutShare, holdout: eligibleOptin - treatable, treatable, treated, waves: wave2 > 0 ? 2 : 1, wave1_pp: wave1, wave2_pp: wave2, lift_pp: liftPp,
-    required_eligible: Math.ceil(target / (1 - holdoutShare) - 1e-9), required_confirmed: Math.ceil(target / (1 - holdoutShare) / optin - 1e-9), feasible: target <= treatable,
+    // a 100% holdout leaves nobody to treat and a 0% opt-in leaves nobody eligible: no cohort size can reach the target (null, never a division by zero)
+    required_eligible: holdoutShare >= 1 ? null : Math.ceil(target / (1 - holdoutShare) - 1e-9), required_confirmed: holdoutShare >= 1 || optin <= 0 ? null : Math.ceil(target / (1 - holdoutShare) / optin - 1e-9), feasible: target <= treatable,
   };
   const bets: BetResult[] = [...acq, { id: 'B4', kind: 'turnout', extra_regs: 0, visitors: rnd(treated * liftPp / 100), budget: g('b4_budget'), formula: wave2 > 0 ? `${treated} treated × (${wave1} pp pre-event + ${wave2} pp day-of) = ${rnd(liftPp * 10) / 10} pp` : `${treated} treated × ${wave1} pp` }];
   const acqVisitors = bets.filter((b) => b.kind === 'acquisition').reduce((t, b) => t + b.visitors, 0);
@@ -149,7 +151,7 @@ export function strategyModel(
       !flags.reach_within_pool && `Assumed deduplicated reach ${r.reach.reached.toLocaleString('en-US')} exceeds the working pool ${r.reach.pool.toLocaleString('en-US')}.`,
       !flags.identified_within_reach && `Identified people ${r.reach.identified.toLocaleString('en-US')} exceed reach ${r.reach.reached.toLocaleString('en-US')}.`,
       !flags.reminders_within_confirmed && `B4 treats ${treated.toLocaleString('en-US')} people but only ${r.confirmed.toLocaleString('en-US')} are confirmed registrants.`,
-      !flags.reminders_feasible && `B4 target of ${rm.target.toLocaleString('en-US')} treated needs ≥ ${rm.required_eligible.toLocaleString('en-US')} opted-in eligible people at a ${Math.round(rm.holdout_share * 100)}% holdout (≥ ${rm.required_confirmed.toLocaleString('en-US')} confirmed at ${Math.round(rm.optin_rate * 100)}% opt-in); only ${rm.confirmed.toLocaleString('en-US')} are confirmed (${rm.eligible_optin.toLocaleString('en-US')} opted in). Treated is capped at ${rm.treated.toLocaleString('en-US')}.`,
+      !flags.reminders_feasible && `B4 target of ${rm.target.toLocaleString('en-US')} treated needs ${rm.required_eligible === null ? 'more opted-in people than any cohort size can supply' : `≥ ${rm.required_eligible.toLocaleString('en-US')} opted-in eligible people`} at a ${Math.round(rm.holdout_share * 100)}% holdout (${rm.required_confirmed === null ? 'no confirmed count reaches it' : `≥ ${rm.required_confirmed.toLocaleString('en-US')} confirmed`} at ${Math.round(rm.optin_rate * 100)}% opt-in); only ${rm.confirmed.toLocaleString('en-US')} are confirmed (${rm.eligible_optin.toLocaleString('en-US')} opted in). Treated is capped at ${rm.treated.toLocaleString('en-US')}.`,
       !flags.day_split_reconciles && `Day split (${r.capacity.day1} + ${r.capacity.day2} − ${r.capacity.repeat} = ${r.capacity.weekend_unique}) differs from the modeled total ${r.total} by ${gap}.`,
     ].filter((w): w is string => !!w);
     return { reminder: rm, raw_total: r.total, headline: r.headline, reference_spend: r.reference.spend, bets_spend: r.bets_spend, reserve: r.reserve, cap: r.cap, ...flags, day_split_gap: gap, warnings };
@@ -176,4 +178,13 @@ export function scoreBets(bets: BetScoreInput[], w = { impact: 0.5, confidence: 
       return { id: b.id, score: rnd(((parts.impact + parts.confidence + parts.ease) / 5) * 100), contributions: parts };
     })
     .sort((x, y) => y.score - x.score);
+}
+
+/** Range check shared by the mutation, the workbench form and Copilot what-if: every `ratio` assumption (opt-in, holdout, show-up…) is a share in [0, 1]. Returns an error message or null. */
+export function assumptionError(a: { key: string; unit?: string | null }, value: number): string | null {
+  if (!Number.isFinite(value)) return `${a.key} must be a finite number.`;
+  if ((a.unit === 'ratio' || a.key === 'b4_optin' || a.key === 'b4_holdout') && (value < 0 || value > 1)) return `${a.key} is a share and must be between 0 and 1 (0%–100%); got ${value}.`;
+  if (a.unit === 'pp' && (value < -100 || value > 100)) return `${a.key} is in percentage points and must be between −100 and 100; got ${value}.`;
+  if ((a.unit === 'people' || a.unit === 'INR') && value < 0) return `${a.key} cannot be negative; got ${value}.`;
+  return null;
 }

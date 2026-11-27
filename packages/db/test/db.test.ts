@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { snapshot } from '@gc/core';
 import {
-  MutationError, addCheckin, addDailyMarketing, addPerson, addRegistration, addTargetVersion, applyMutation, changeRegistrationStatus, confirmDraft, createDraft,
+  MutationError, addCheckin, addDailyMarketing, addPerson, addRegistration, addTargetVersion, applyMutation, changeRegistrationStatus, confirmDraft, createDraft, exportSnapshot,
   createDb, deleteCampaign, discardDraft, loadDataset, migrate, readConsistent, resetToSeed, withSnapshot, seedDb, updateCampaign, verifyAgainstReference, withClient, type Db,
 } from '../src';
 
@@ -289,4 +289,66 @@ describe('one transaction snapshot per read (revision-overlap)', () => {
     await withSnapshot(fake, async (x) => { await x.query('SELECT 1'); });
     expect(seen[0]).toBe('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY'); expect(seen[1]).toBe('SELECT 1');
   });
+});
+
+describe('round-4 readout and assumption validation (persisted path = preview path)', () => {
+  const B5 = 5, B3 = 3;
+  const okG = { confirmation_pct: 90, marginal_visitor_cost_inr: 150 }, fc = { forecast_extra_visitors: 45, forecast_visitor_cost_inr: 120 };
+  const readout = async (id: number, input: Record<string, unknown>) => {
+    await applyMutation(db, 'experiment', 'readout', { id, ...input });
+    return (await db.query('SELECT decision, observed_n, observation FROM experiments WHERE id=$1', [id]))[0] as any;
+  };
+  const gateOf = (r: any) => r.observation.gates[0].decision;
+  it('a complete eligible B5 readout releases; the persisted sample is the count denominator', async () => {
+    const r = await readout(B5, { kpi_numerator: 50, kpi_denominator: 500, guardrail_observations: okG, gate_inputs: fc });
+    expect(r.decision).toBe('scale'); expect(gateOf(r)).toBe('release'); expect(Number(r.observed_n)).toBe(500);
+  });
+  it('70% confirmation with a blank KPI never releases (hold); a negative forecast cost is rejected', async () => {
+    const r = await readout(B5, { observed_n: 500, guardrail_observations: { ...okG, confirmation_pct: 70 }, gate_inputs: fc });
+    expect(r.decision).toBe('insufficient_sample'); expect(gateOf(r)).toBe('hold');
+    await expect(applyMutation(db, 'experiment', 'readout', { id: B5, kpi_numerator: 50, kpi_denominator: 500, guardrail_observations: okG, gate_inputs: { ...fc, forecast_visitor_cost_inr: -1 } })).rejects.toThrow(/cost cannot be negative/);
+  });
+  it('a hard confirmation breach and a below-minimum denominator both withhold the release', async () => {
+    expect(gateOf(await readout(B5, { kpi_numerator: 50, kpi_denominator: 500, guardrail_observations: { ...okG, confirmation_pct: 74.99 }, gate_inputs: fc }))).toBe('hold');
+    const low = await readout(B5, { kpi_numerator: 40, kpi_denominator: 300, guardrail_observations: okG, gate_inputs: fc });
+    expect(low.decision).toBe('insufficient_sample'); expect(gateOf(low)).not.toBe('release');
+  });
+  it('B3 1/5 with a typed n=250 is rejected (the denominator is the sample); B4 lower bound above the point estimate is rejected', async () => {
+    await expect(applyMutation(db, 'experiment', 'readout', { id: B3, kpi_numerator: 1, kpi_denominator: 5, observed_n: 250, guardrail_observations: { abuse_pct: 1, visitor_cost_inr: 100 } })).rejects.toThrow(/contradicts the KPI denominator/);
+    await expect(applyMutation(db, 'experiment', 'readout', { id: 4, observed_value: 60, observed_n: 1800, guardrail_observations: { delivery_pct: 95, optout_pct: 1 }, gate_inputs: { itt_lift_pp: 4, itt_ci_low_pp: 10 } })).rejects.toThrow(/cannot exceed the point estimate/);
+  });
+  it('assumption writes validate ratio ranges (120% opt-in rejected, 0% and 100% accepted)', async () => {
+    await expect(applyMutation(db, 'assumption', 'upsert', { key: 'b4_optin', scenario: 'stretch', value: 1.2 })).rejects.toThrow(/between 0 and 1/);
+    await expect(applyMutation(db, 'assumption', 'upsert', { key: 'b4_holdout', scenario: 'stretch', value: -0.2 })).rejects.toThrow(/between 0 and 1/);
+    await applyMutation(db, 'assumption', 'upsert', { key: 'b4_optin', scenario: 'stretch', value: 0 });
+    await applyMutation(db, 'assumption', 'upsert', { key: 'b4_holdout', scenario: 'stretch', value: 1 });
+    expect(Number((await db.query(`SELECT value FROM plan_assumptions WHERE key='b4_optin' AND scenario='stretch'`))[0]!.value)).toBe(0);
+  });
+});
+
+describe('export reads metadata and tables in ONE snapshot transaction (P2-5)', () => {
+  it('uses a single transaction and the revision describes the contents', async () => {
+    let txs = 0;
+    const counted = new Proxy(db, { get: (t, k) => (k === 'tx' ? (...a: any[]) => { txs++; return (t.tx as any)(...a); } : (t as any)[k]) }) as Db;
+    await addDailyMarketing(db, { campaign_id: 'C02', activity_date: '2025-04-16', marketing_spend_inr: 1379 });
+    const { meta, tables } = await exportSnapshot(counted);
+    expect(txs).toBe(1);
+    expect(meta.data_revision).toBe(await rev());
+    expect((tables as any).daily_marketing.some((r: any) => r.marketing_spend_inr === 1379)).toBe(true);
+  });
+  // real Postgres only (PGlite serialises transactions): set GC_TEST_PG_URL to a SCRATCH database to run the forced overlap
+  const pgUrl = process.env.GC_TEST_PG_URL;
+  (pgUrl ? it : it.skip)('a write committed between the metadata read and the table read is not visible in the export (Postgres REPEATABLE READ)', async () => {
+    const pg = await createDb(pgUrl!);
+    try {
+      await migrate(pg); await seedDb(pg); await resetToSeed(pg, 'system');
+      const r0 = Number((await pg.query('SELECT data_revision FROM app_meta'))[0]!.data_revision);
+      const out = await exportSnapshot(pg, async () => { await addDailyMarketing(pg, { campaign_id: 'C02', activity_date: '2025-04-16', marketing_spend_inr: 1379 }); });
+      expect(out.meta.data_revision).toBe(r0);
+      expect((out.tables as any).daily_marketing.some((r: any) => r.marketing_spend_inr === 1379)).toBe(false);
+      const next = await exportSnapshot(pg);
+      expect(next.meta.data_revision).toBe(r0 + 1);
+      expect((next.tables as any).daily_marketing.some((r: any) => r.marketing_spend_inr === 1379)).toBe(true);
+    } finally { await pg.close(); }
+  }, 120000);
 });

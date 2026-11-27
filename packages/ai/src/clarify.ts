@@ -1,4 +1,5 @@
 import type { ChatContext } from './env';
+import { explicitDates, namedCheckpointDates } from './grounding';
 
 /** Campaign mentions → ids. */
 const CAMPAIGNS: [string, RegExp][] = [
@@ -17,7 +18,13 @@ const ANAPHORA = /\b(those|these|the|both)\s+(two|pair)\b|\bthem\b|\bboth\b|\bth
 const ALL = /\ball\s+(?:seven|7|the)?\s*campaigns?\b|\beach\s+campaign\b|\bevery\s+campaign\b|\bwhich\s+(?:campaign|channel)\s+(?:has|had|is|was|did|spent|cost|got|gets)\b/i;
 const JUDGE_ONE = /\bworth\s+the\s+money\b|\bwas\s+(?:it|that(?:\s+campaign)?)\s+worth\b|\bis\s+(?:it|that\s+campaign)\s+better\b/i;
 
-export interface Resolution { subjects: string[]; all: boolean; metric: boolean; asOf: string | null }
+export interface Resolution { subjects: string[]; all: boolean; metric: boolean; asOf: string | null; /** every date or named checkpoint the request itself mentions (ISO, "23 Feb", "event close"…) */ dates: string[]; /** what is being compared: two campaigns at one date, or one campaign at two dates */ axis: 'subjects' | 'time' }
+/** Named checkpoints resolve to labels here (their ISO dates are fixed by the tools); only the COUNT of distinct time points matters for the axis. */
+const FAKE_CP = { event_close: 'event close', data_close: 'data close', day_1: 'day 1' };
+export function timePoints(text: string, year = '2025'): string[] {
+  const pts = new Set<string>([...explicitDates(text, year), ...namedCheckpointDates(text, FAKE_CP)]);
+  return [...pts];
+}
 
 /**
  * Resolve what a comparison/judgement question is about from the request itself, the page context and the conversation:
@@ -41,7 +48,10 @@ export function resolveComparison(question: string, context: ChatContext = {}, t
   const lastUserMetric = [...history].reverse().find((h) => h.role === 'user' && METRIC.test(h.text));
   const metricPrior = !NO_METRIC.test(question) && !!lastUserMetric && !NO_METRIC.test(lastUserMetric.text);
   const date = /\b\d{4}-\d{2}-\d{2}\b/.exec(question)?.[0] ?? context.asOf ?? null;
-  return { subjects, all: ALL.test(question), metric: metricNow || metricPrior, asOf: date };
+  const dates = timePoints(question);
+  // one subject at two (or more) time points compares the subject with ITSELF over time; it does not need a second campaign
+  const axis = dates.length >= 2 && subjects.length <= 1 && !ALL.test(question) ? 'time' : 'subjects';
+  return { subjects, all: ALL.test(question), metric: metricNow || metricPrior, asOf: dates.length === 1 ? dates[0]! : date, dates, axis };
 }
 
 const OPTIONS = {
@@ -69,7 +79,7 @@ export function clarifyingQuestion(question: string, context: ChatContext = {}, 
   if (!comparative || !aboutCampaigns) return null;
   const r = resolveComparison(question, context, history);
   const single = JUDGE_ONE.test(question) && !COMPARATIVE.test(question.replace(JUDGE_ONE, ''));
-  const needSubjects = !r.all && r.subjects.length < (single ? 1 : 2);
+  const needSubjects = !r.all && r.axis !== 'time' && r.subjects.length < (single ? 1 : 2);
   // a measure is only demanded for judgement-style asks ("better", "worth it"); a ranking question that names its measure is fine
   const needMetric = !r.metric && (JUDGEMENT.test(question) || NO_METRIC.test(question) || (needSubjects && !r.all));
   if (!needSubjects && !needMetric) return null;

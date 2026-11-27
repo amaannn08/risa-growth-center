@@ -1,7 +1,7 @@
 'use client';
 import { useState } from 'react';
 import type { UIMessage } from 'ai';
-import { groundingFromCalls, groundingLabel, type TurnCall } from '@gc/ai/src/grounding';
+import { finalAnswerText, groundingFromCalls, groundingLabel, type TurnCall } from '@gc/ai/src/grounding';
 import { Markdown } from './Markdown';
 import { DraftCard } from './DraftCard';
 
@@ -43,7 +43,8 @@ export function Sources({ parts }: { parts: any[] }) {
 
 export function MessageView({ m, history }: { m: UIMessage; history: UIMessage[] }) {
   const parts = (m.parts ?? []) as any[];
-  const text = parts.filter((p) => p.type === 'text').map((p) => p.text as string).filter((t) => t.trim()).join('\n\n');
+  // The answer is ONLY the text after the last tool call (finalAnswerText): interim narration is never shown, so what the user reads is exactly what is checked and scored.
+  const text = m.role === 'user' ? parts.filter((p) => p.type === 'text').map((p) => p.text as string).filter((t) => t.trim()).join('\n\n') : finalAnswerText(parts);
   if (m.role === 'user') return <div className="ml-8 rounded-lg bg-slate-900 px-3 py-1.5 text-sm text-white">{text}</div>;
   const drafts = parts.filter((p) => isToolPart(p) && p.state === 'output-available' && p.output?.draft_id);
   const upto = history.slice(0, history.indexOf(m) + 1);
@@ -54,9 +55,12 @@ export function MessageView({ m, history }: { m: UIMessage; history: UIMessage[]
   return (
     <div className="mr-4" data-testid="assistant-msg">
       {text && <div className="rounded-lg bg-slate-100 px-3 py-2"><Markdown text={text} unverified={g ? new Set(g.bad_citations) : undefined} /></div>}
+      {drafts.length === 0 && /\bdraft\b[^.\n]{0,40}\b(?:ready|pending|created|prepared|saved)\b|\bI(?:'ve| have)? (?:drafted|created)\b/i.test(text) && <div data-testid="phantom-draft" className="mt-1 text-[11px] text-amber-700">⚠ No draft was created in this turn (no propose_task result). Nothing is waiting for your confirmation; ask again to get a real draft card.</div>}
       {drafts.map((p, i) => <DraftCard key={p.output.draft_id + i} out={p.output} />)}
       <Sources parts={parts} />
-      {g && (g.checked > 0 || g.bad_citations.length > 0) && <div data-testid="grounding" className={`mt-1 text-[11px] ${g.ok ? 'text-emerald-700' : 'text-amber-700'}`} title={g.ok ? '' : 'Figures not found in a tool result, or citations naming a tool that did not run in this turn'}>{groundingLabel(g)}</div>}
+      {g && g.bindings.length > 0 && <details className="mt-0.5 text-[10px] text-slate-500" data-testid="bindings"><summary className="cursor-pointer">Claim bindings ({g.bindings.length})</summary>
+        <ul className="mt-0.5 space-y-0.5">{g.bindings.slice(0, 20).map((b, i) => <li key={i}><b>{b.raw}</b> ← {b.tool} · call {b.callId ?? '—'} · {b.field || 'value'} · {b.unit} · tool value {b.signedValue.toLocaleString('en-US')} · scope {b.scope ?? 'n/a'} · as of {b.asOf ?? '—'} · r{b.revision ?? '—'}</li>)}</ul></details>}
+      {g && (g.checked > 0 || g.bad_citations.length > 0 || g.claim_mismatches.length > 0) && <div data-testid="grounding" className={`mt-1 text-[11px] ${g.ok ? 'text-emerald-700' : 'text-amber-700'}`} title={g.ok ? '' : 'Figures not found in a tool result, or citations naming a tool that did not run in this turn'}>{groundingLabel(g)}</div>}
     </div>
   );
 }
