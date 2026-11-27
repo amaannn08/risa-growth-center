@@ -2,7 +2,7 @@
 
 **Aman Gupta · IIT Kharagpur** · City: **Bengaluru** · Target: **2,400 base / 2,850 stretch unique verified external visitors** at a **₹300,000 marketing cap** (2025 actual: 2,050).
 
-- **Live app:** `https://<deploy-url>` (set `NEXT_PUBLIC_SITE_URL`; the deploy URL is added by the person who deploys)
+- **Live app:** https://risa-growth-center-six.vercel.app
 - **Slides (3 pages, 16:9):** [`docs/strategy-slides.pdf`](docs/strategy-slides.pdf) — rendered from the live `/slides` route by `pnpm slides:pdf`
 - **Copilot eval report:** [`docs/eval-report.md`](docs/eval-report.md) · progress log: [`docs/PROGRESS.md`](docs/PROGRESS.md)
 - Screenshots: [`docs/screenshots/`](docs/screenshots)
