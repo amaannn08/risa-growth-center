@@ -54,3 +54,32 @@
 - Pitfall in this sandbox: `pkill -f "next dev"` kills the invoking shell; find the pid with `ss -ltnp` instead.
 - Not done (by design, later sessions): Copilot (M8), eval (M9), `/slides`, README, docs-consistency test, screenshots, error/loading boundaries beyond a dash 404 (M10–M11).
 - No git commits made. `git rm --cached apps/web/app/page.tsx` left a staged deletion (the root page moved to `app/(dash)/page.tsx`).
+
+---
+
+## Session C (M8–M11): DONE — exit gate green
+
+| Gate | Command | Result (real output) |
+|---|---|---|
+| Repo gate | `pnpm turbo typecheck lint test build` | `Tasks: 13 successful, 13 total` (core 76 tests, db 10, ai 51; web build compiled: `/ /campaigns /campaigns/[id] /diagnose /strategy /execution /data /copilot /slides` + `/api/{chat,drafts/[id]/confirm,drafts/[id]/discard,admin/reset,export,mutations/[entity]}`) |
+| M8 tool tests | `pnpm --filter @gc/ai test` | 51/51: all **34 eval items** have deterministic ground truth through the tools (no LLM), zod/OUT_OF_COVERAGE, name→id, context inheritance, what_if never persists, calculate safety, propose_task→pending draft + concurrent double-confirm = exactly 1 task, grounding extractor (6), JSON-loop parser/retry, rate limiter |
+| M8 smoke | `BASE_URL=http://localhost:3300 pnpm smoke` (prod build, Neon) | `native tool calls in 4/4 turns` (Q1 get_funnel+get_targets; Q9 get_funnel; Q10 get_funnel(C02); Q16 describe_data) → native tool calling is reliable; **JSON fallback is built and unit-tested but not needed** (`COPILOT_MODE=json`) |
+| M9 eval | `pnpm eval --base-url http://localhost:3100` (local, PGlite) | **30/34 (88.2%) · refusals 3/3 · drafts 2/2** → `docs/eval-report.md`. Iteration history: 11/34 (first run, 429s from the chat rate limit) → 25 → 25 → 29 → 29 → 30. Run-to-run noise is real (±3 items). Misses: #10 (omits confirmed 58.62%), #13 (omits the 240), #28/#34 (self-computed ratios flagged by the grounding check) |
+| M10 slides | `BASE_URL=http://localhost:3100 pnpm slides:pdf` | `pdfinfo`: `Pages: 3`, `Page size: 960 x 540 pts`; page 1 contains "Aman Gupta"; numbers come from `slideContent(strategyModel)` |
+| M10 docs | `pnpm --filter @gc/core test` (docsConsistency.test.ts) | model = README = slides module for 2,400 · 2,850 · 2,972 · 3,397 · 2,690 · 3,097 · 2,276 · 2,725 · ₹273,000 · ₹279,000 · ₹27,000 · 2,206 · 92/85/80/71/54 |
+| M10 screenshots | `BASE_URL=… COPILOT_SHOT=1 pnpm tsx scripts/screenshots.ts` | 10 PNGs in `docs/screenshots/` (all pages + live Copilot panel with Sources and "✓ All 31 figures traced") |
+| e2e | `pnpm --filter web e2e` | **13/13**: the 10 changed-data scenarios (a–i + 404) + Copilot panel (mock provider: Sources + grounding chip), draft confirm → exactly one task on Execution, discard creates nothing |
+| Neon | `pnpm db:verify` | `db:verify OK on postgres — 5 snapshots + data_quality match metrics.json (3348 ms)` |
+| Neon timings | `next start` (prod build) on Neon | warm: `/` 0.37 s · `/campaigns` 0.26 · `/campaigns/C02` 0.42 · `/diagnose` 0.49 · `/strategy` 0.61 · `/execution` 0.31 · `/data` 0.51 · `/copilot` 0.11 · `/slides` 0.26 (first hit after start ≈ 3.3 s incl. dataset load) |
+
+### What was added in Session C
+- `@gc/ai`: `tools.ts` (18 tools; `runTool` = zod validation + typed `{error:{code,message,hint}}`), `env.ts` (`makeEnv` pins one dataset revision), `systemPrompt.ts` (v1.2, campaign-id map, "final message self-contained", "no self-computed figures", scenario-only for forward-looking), `grounding.ts` (extractor + allowed-set; figures that are a sum/difference/complement of two traced figures in the same answer are reported as *derived*, not failures), `agent.ts` (AI SDK **v7**: `streamText` with `instructions`, `isStepCount(6)`, `toUIMessageStream`; DeepSeek via `@ai-sdk/openai-compatible` with a fetch wrapper that sends `thinking:{type:'disabled'}` and falls back to `deepseek-chat` on model errors), `jsonFallback.ts`, `mock.ts`, `eval/{questions,score,client,run,smoke}.ts`.
+- Web: `/api/chat` (rate limit 20/10 min per IP hash, daily cap 1,500 via `chat_logs`, history trimmed to 16, `COPILOT_MODE=native|json|mock`, logs question/tool calls/grounding/latency), `/api/drafts/:id/{confirm,discard}`, Copilot dock (resizable side panel, persisted open state) + `/copilot` full page sharing one `Chat` singleton, Sources, draft cards with editable fields, grounding chip, error/retry state; `/slides`; `scripts/{slides-pdf,screenshots}.ts`; loading skeletons on pages that never 404 (a `loading.tsx` above `campaigns/[id]` or a `Suspense` around `{children}` turns the unknown-campaign 404 into a streamed 200 — covered by the e2e 404 test); `error.tsx`, root `not-found.tsx`.
+- **Overdue fix:** the task board's *overdue* now compares due dates with the **selected as-of date** (the app's clock), labelled "Overdue (due before as-of …)" with a tooltip. Rationale: the seeded tasks are next-edition (2026) items on a 2025 dataset, so the real-world date marked all of them overdue.
+- README complete per §15 (incl. honest **Tools used**: Claude Code (Sonnet/Opus) + OpenAI Codex as coding/research assistants, DeepSeek powering the Copilot). `.env.example` at repo root and `apps/web`. `turbo.json`: `build` now depends on the same package's `typecheck` (they raced on `.next/types`).
+
+### Notes for the orchestrator (deploy)
+- Set env on Vercel: `DATABASE_URL` (Neon pooled), `DEEPSEEK_API_KEY`, `DEEPSEEK_MODEL=deepseek-flash`, `COPILOT_MODE=native`, `NEXT_PUBLIC_SITE_URL` (then re-run `pnpm slides:pdf` so the slide footer shows the live URL; README still has the `https://<deploy-url>` placeholder in the summary).
+- Run the eval post-deploy **only on a Neon eval branch** (setup items write data and reset afterwards): `pnpm eval --base-url https://<url>`; raise `CHAT_RATE_LIMIT` (and `MUTATION_RATE_LIMIT`) on that deployment while it runs, otherwise the default 20/10-min chat limit returns 429s.
+- AI SDK is v7 (`ai@7.0.183`): `instructions` (not `system`), `isStepCount`, `toUIMessageStream({stream: result.stream})`, `createUIMessageStreamResponse`. `DEEPSEEK_THINKING=enabled` re-enables reasoning (not recommended: needs `reasoning_content` round-trips).
+- The Copilot answers are LLM-generated; grounding flags untraced figures but does not block them. Local eval DB / dev servers used `.pglite-eval` (git-ignored). No commits made.

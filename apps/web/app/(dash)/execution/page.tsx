@@ -25,7 +25,8 @@ export default async function Execution({ searchParams }: { searchParams: SP }) 
   });
   const m = liveStrategy(ctx);
   const planTotal = rows.reduce((t, r) => t + (r.plan_budget_inr ?? 0), 0);
-  const today = new Date().toISOString().slice(0, 10);
+  // App clock = the selected as-of date (not the real-world date): next-edition tasks are planned in 2026 against a 2025 dataset.
+  const today = ctx.asOf;
 
   return (
     <div className="space-y-4">

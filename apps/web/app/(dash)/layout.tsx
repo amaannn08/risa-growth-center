@@ -1,5 +1,6 @@
 import { Suspense } from 'react';
 import { Nav } from '@/components/Nav';
+import { CopilotDock } from '@/components/copilot/Dock';
 import { TopBar } from '@/components/TopBar';
 import { getShellMeta } from '@/lib/data';
 import { getDb, loadDataset } from '@gc/db';
@@ -15,10 +16,10 @@ export default async function DashLayout({ children }: { children: React.ReactNo
         <div className="px-4 py-3"><div className="text-sm font-semibold">RISA Growth Center</div><div className="text-xs text-slate-500">CampusFest · Challenge A</div></div>
         <Suspense><Nav /></Suspense>
       </aside>
-      <div className="min-w-0 flex-1">
-        <Suspense><TopBar rev={meta.data_revision} edits={meta.edits_since_reset} covStart={coverageStart(ds)} covEnd={coverageEnd(ds)} /></Suspense>
-        <main className="p-4">{children}</main>
-      </div>
+      <CopilotDock>
+          <Suspense><TopBar rev={meta.data_revision} edits={meta.edits_since_reset} covStart={coverageStart(ds)} covEnd={coverageEnd(ds)} /></Suspense>
+          <main className="p-4">{children}</main>
+      </CopilotDock>
     </div>
   );
 }

@@ -42,7 +42,7 @@ export function TaskBoard({ tasks, campaigns, owners, bets, experiments, today }
     <div>
       <div className="mb-3 flex flex-wrap items-center gap-3">
         {sel('Campaign', 'campaign', campaigns)}{sel('Owner', 'owner', owners)}{sel('Priority', 'priority', ['p0', 'p1', 'p2'].map((v) => ({ value: v, label: v })))}
-        <label className="flex items-center gap-1 text-xs"><input type="checkbox" checked={f.overdue} onChange={(e) => setF({ ...f, overdue: e.target.checked })} />Overdue (before {today})</label>
+        <label className="flex items-center gap-1 text-xs"><input type="checkbox" checked={f.overdue} onChange={(e) => setF({ ...f, overdue: e.target.checked })} /><span title="Overdue is measured against the as-of date picked in the top bar (the app's clock), not the real-world date.">Overdue (due before as-of {today})</span></label>
         <div className="ml-auto"><FormButton spec={taskSpec(null, campaigns, owners, bets, experiments)} label="+ New task" className="rounded bg-slate-900 px-3 py-1 text-xs text-white" /></div>
       </div>
       <div className="grid gap-3 md:grid-cols-4" data-testid="kanban">

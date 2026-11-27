@@ -17,6 +17,6 @@ export default defineConfig({
     url: `http://localhost:${PORT}/campaigns`,
     reuseExistingServer: false,
     timeout: 180_000,
-    env: { DATABASE_URL: DB, MUTATION_RATE_LIMIT: '100000', NEXT_TELEMETRY_DISABLED: '1' },
+    env: { DATABASE_URL: DB, MUTATION_RATE_LIMIT: '100000', COPILOT_MODE: 'mock', CHAT_RATE_LIMIT: '100000', NEXT_TELEMETRY_DISABLED: '1' },
   },
 });

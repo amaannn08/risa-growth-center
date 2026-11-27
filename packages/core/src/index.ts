@@ -20,3 +20,4 @@ export * from './strategy/content';
 export * from './diff';
 export * from './experiments';
 export * from './strategy/history';
+export * from './strategy/slides';

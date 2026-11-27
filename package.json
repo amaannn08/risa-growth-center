@@ -11,12 +11,18 @@
     "db:migrate": "pnpm --filter @gc/db exec tsx scripts/cli.ts migrate",
     "db:seed": "pnpm --filter @gc/db exec tsx scripts/cli.ts seed",
     "db:verify": "pnpm --filter @gc/db exec tsx scripts/cli.ts verify",
-    "db:reset": "pnpm --filter @gc/db exec tsx scripts/cli.ts reset"
+    "db:reset": "pnpm --filter @gc/db exec tsx scripts/cli.ts reset",
+    "slides:pdf": "tsx scripts/slides-pdf.ts",
+    "eval": "pnpm --filter @gc/ai exec tsx eval/run.ts",
+    "smoke": "pnpm --filter @gc/ai smoke",
+    "e2e": "pnpm --filter web e2e"
   },
   "devDependencies": {
+    "@playwright/test": "^1",
+    "@types/node": "^22",
+    "tsx": "^4",
     "turbo": "^2",
     "typescript": "^5.6.0",
-    "vitest": "^2.1.0",
-    "@types/node": "^22"
+    "vitest": "^2.1.0"
   }
 }
