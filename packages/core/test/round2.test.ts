@@ -35,7 +35,7 @@ describe('strategy constraints are real checks (not tautologies)', () => {
     const m = strategyModel();
     for (const s of ['base', 'stretch'] as const) {
       const r = m.reconciliation[s];
-      expect(r.warnings).toEqual([]); expect(r.reserve_nonnegative && r.budget_sums_to_cap && r.reach_within_pool && r.identified_within_reach && r.reminders_within_confirmed && r.day_split_reconciles).toBe(true);
+      expect(r.warnings).toEqual([]); expect(r.reserve_nonnegative && r.budget_sums_to_cap && r.reach_within_pool && r.identified_within_reach && r.reminders_within_confirmed && r.reminders_feasible && r.day_split_reconciles).toBe(true);
     }
     expect(m.reconciliation.base.day_split_gap).toBe(1);
   });
@@ -47,7 +47,26 @@ describe('strategy constraints are real checks (not tautologies)', () => {
     expect(strategyModel(withA('reach_dedup', 'base', 130000)).reconciliation.base.reach_within_pool).toBe(false);
     expect(strategyModel(withA('identified_pre_event', 'base', 90000)).reconciliation.base.identified_within_reach).toBe(false);
     const r = strategyModel(withA('b4_treated', 'base', 5000)).reconciliation.base;
-    expect(r.reminders_within_confirmed).toBe(false); expect(r.warnings.join(' ')).toMatch(/B4 treats 5,000/);
+    expect(r.reminders_feasible).toBe(false); expect(r.reminder.treated).toBeLessThan(2690); expect(r.reminders_within_confirmed).toBe(true);
+    expect(r.warnings.join(' ')).toMatch(/B4 target of 5,000 treated needs ≥ 6,250/);
+  });
+  it('B4 treatment needs eligible opt-ins after the holdout: 2,500 treated at a 20% holdout needs ≥ 3,125 eligible, so the old stretch target was infeasible', () => {
+    const old = strategyModel(withA('b4_treated', 'stretch', 2500)).reconciliation.stretch;
+    expect(old.reminder.required_eligible).toBe(3125);
+    expect(old.reminder.confirmed).toBe(3097); expect(old.reminders_feasible).toBe(false);
+    expect(old.reminder.treated).toBe(2229); // ⌊⌊3097 × 90% opt-in⌋ × 80%⌋
+    expect(old.warnings.join(' ')).toMatch(/needs ≥ 3,125 opted-in eligible people at a 20% holdout \(≥ 3,473 confirmed at 90% opt-in\); only 3,097 are confirmed/);
+    // even at 100% opt-in the 3,097 confirmed give only 2,477 treatment slots
+    const full = strategyModel(withA('b4_optin', 'stretch', 1) ).reconciliation.stretch;
+    expect(full.reminder.treatable).toBe(2477);
+    // shipped defaults are feasible and carry the opt-in rate and holdout share in the reconciliation
+    const s = strategyModel().reconciliation.stretch;
+    expect(s.reminders_feasible).toBe(true); expect([s.reminder.optin_rate, s.reminder.holdout_share, s.reminder.target, s.reminder.treated]).toEqual([0.9, 0.2, 2229, 2229]);
+    expect(s.reminder.eligible_optin).toBe(2787); expect(s.reminder.holdout).toBe(2787 - 2229);
+    // two-wave cadence closes the visitor gap through visits per person, not the treated count: 2,229 × (5.8 + 0.7) pp = 145
+    expect([s.reminder.waves, s.reminder.lift_pp, strategyModel().stretch.reminder_visitors]).toEqual([2, 6.5, 145]); expect(s.reminder.treated).toBeLessThanOrEqual(s.reminder.eligible_optin);
+    expect([s.reminders_within_confirmed, s.day_split_reconciles, s.raw_total, s.headline]).toEqual([true, true, 2850, 2850]);
+    expect(strategyModel().reconciliation.base.reminder.waves).toBe(1);
   });
   it('a day split that no longer reconciles to the raw total is flagged', () => {
     expect(strategyModel(withA('repeat_visitors', 'base', 100)).reconciliation.base.day_split_reconciles).toBe(false);

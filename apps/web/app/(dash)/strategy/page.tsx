@@ -14,10 +14,10 @@ export default async function Strategy({ searchParams }: { searchParams: SP }) {
   const { history, visitors2025 } = historyFromDataset(ds);
   const planBudgets = Object.fromEntries(Object.values(ds.campaigns).map((c) => [c.campaign_id, Number(c.plan_budget_inr ?? 0)]));
   const names = Object.fromEntries(Object.values(ds.campaigns).map((c) => [c.campaign_id, c.campaign_name]));
-  const bets = await ctx.db.query<any>(`SELECT id, rank, name, mechanism, impact::float8 AS impact, confidence::float8 AS confidence, ease::float8 AS ease, params, start_offset_weeks, end_offset_weeks FROM bets ORDER BY rank`);
+  const bets = ctx.mgmt.bets;
   const betRows: BetRow[] = bets.map((b) => ({ id: b.id, rank: b.rank, name: b.name, mechanism: b.mechanism, impact: b.impact, confidence: b.confidence, ease: b.ease, owner_label: b.params?.owner_label ?? '', start_offset_weeks: b.start_offset_weeks, end_offset_weeks: b.end_offset_weeks, dependencies: b.params?.dependencies ?? '' }));
-  const rejected = await ctx.db.query<any>('SELECT * FROM rejected_ideas ORDER BY id');
-  const exps = await ctx.db.query<any>(`SELECT id, bet_id, name, primary_kpi, kpi_unit, assignment_unit, scale_op, scale_value::float8 AS scale_value, stop_op, stop_value::float8 AS stop_value, change_rule, stop_note, status::text AS status FROM experiments ORDER BY bet_id, id`);
+  const rejected = ctx.mgmt.rejected;
+  const exps = [...ctx.mgmt.experiments].sort((a, b) => String(a.bet_id).localeCompare(String(b.bet_id)) || a.id - b.id);
   const m = liveStrategy(ctx);
 
   return (

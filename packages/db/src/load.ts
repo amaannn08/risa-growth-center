@@ -1,5 +1,5 @@
 import { buildDataset, type Dataset, type RawInput, type TableQuality } from '@gc/core';
-import type { Q } from './client';
+import { withSnapshot, type Db, type Q } from './client';
 
 const TS = (c: string) => `to_char(${c} at time zone 'Asia/Kolkata','YYYY-MM-DD"T"HH24:MI:SS')||'+05:30'`;
 const cols = (ts: string[], plain: string[]) => [...ts.map((c) => `${TS(c)} AS ${c}`), ...plain].join(', ');
@@ -53,4 +53,28 @@ export async function loadDataset(q: Q, scope: object = q): Promise<{ ds: Datase
     g.__gcDsCache = { scope, rev: meta.dataset_revision, ds };
   }
   return { ds: { ...ds, revision: meta.data_revision }, meta };
+}
+
+/** Management rows that carry evidence/decisions shown next to the dataset (tasks, experiments, bets, team, rejected ideas, assumptions, rules). */
+export async function loadManagement(q: Q) {
+  const [tasks, experiments, team, bets, rejected, assumptions, rules] = await Promise.all([
+    q.query<any>(`SELECT id, title, description, campaign_id, owner_id, due_date::text AS due_date, status::text AS status, priority::text AS priority, experiment_id, bet_id, insight_id, evidence, created_via::text AS created_via FROM tasks ORDER BY id`),
+    q.query<any>(`SELECT id, bet_id, name, hypothesis, primary_kpi, kpi_unit, assignment_unit, min_sample, scale_op, scale_value::float8 AS scale_value, stop_op, stop_value::float8 AS stop_value, change_rule, stop_note, readout_date::text AS readout_date, status::text AS status, observed_value::float8 AS observed_value, observed_n, decision, owner_id, guardrails, observation FROM experiments ORDER BY id`),
+    q.query<{ owner_id: string; name: string }>('SELECT owner_id, name FROM team_members ORDER BY owner_id'),
+    q.query<any>(`SELECT id, rank, name, mechanism, impact::float8 AS impact, confidence::float8 AS confidence, ease::float8 AS ease, params, start_offset_weeks, end_offset_weeks FROM bets ORDER BY rank`),
+    q.query<any>('SELECT * FROM rejected_ideas ORDER BY id'),
+    q.query<any>(`SELECT key, scenario::text AS scenario, "group", value::float8 AS value, unit, label, kind::text AS kind, source_ref FROM plan_assumptions ORDER BY "group", key, scenario`),
+    q.query<any>(`SELECT mode::text AS mode, metric, scale_op, scale_value::float8 AS scale_value, stop_op, stop_value::float8 AS stop_value, min_registered FROM decision_rules ORDER BY mode, metric`),
+  ]);
+  return { tasks, experiments, team, bets, rejected, assumptions, rules };
+}
+export type Management = Awaited<ReturnType<typeof loadManagement>>;
+
+/** Meta + dataset + management rows (+ optional caller reads) under a single transaction snapshot. */
+export async function readConsistent<X = undefined>(db: Db, extra?: (q: Q, meta: Meta) => Promise<X>) {
+  return withSnapshot(db, async (q) => {
+    const { ds, meta } = await loadDataset(q, db);
+    const [mgmt, x] = await Promise.all([loadManagement(q), extra ? extra(q, meta) : (undefined as X)]);
+    return { ds, meta, mgmt, extra: x as X };
+  });
 }

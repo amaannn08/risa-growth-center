@@ -1,7 +1,7 @@
 'use client';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
-import { EXPERIMENT_GATES, adjudicateExperiment, parseGuardrails } from '@gc/core';
+import { EXPERIMENT_GATES, adjudicateExperiment, parseGuardrails, unparsedGuardrails, validateObservation } from '@gc/core';
 import { Field, Modal, inputCls } from '@/components/Modal';
 import { mutate } from '@/lib/mutate';
 import { DECISION_STYLE } from '@/lib/ui';
@@ -49,10 +49,14 @@ function Readout({ exp, onClose }: { exp: ExpRow; onClose: () => void }) {
   const gate = exp.bet_id ? EXPERIMENT_GATES[exp.bet_id] : undefined;
   const toNum = (v: string | undefined) => (v === undefined || v.trim() === '' ? null : Number(v));
   const rec = (m: Record<string, string>) => Object.fromEntries(Object.entries(m).map(([k, v]) => [k, toNum(v)]));
-  const kpiNum = toNum(obs) ?? (toNum(numer) !== null && toNum(denom) ? (exp.kpi_unit === '%' ? 100 : 1) * toNum(numer)! / toNum(denom)! : null);
+  // Same validator as the server transaction: counts win, a conflicting explicit KPI is an error.
+  const input = { observed_value: toNum(obs), observed_n: toNum(n), kpi_numerator: toNum(numer), kpi_denominator: toNum(denom), guardrail_observations: rec(gr), gate_inputs: rec(gi) };
+  const check = validateObservation(exp, input);
   // Preview only: the server re-adjudicates inside the write transaction and its decision is the one stored.
-  const ev = adjudicateExperiment(exp, { observed_value: kpiNum, observed_n: toNum(n), guardrail_observations: rec(gr), gate_inputs: rec(gi) });
+  const ev = adjudicateExperiment(exp, { ...input, observed_value: check.value });
+  const unparsed = unparsedGuardrails(exp.guardrails);
   const save = async () => {
+    if (check.errors.length) return;
     const r = await mutate('experiment', 'readout', { id: exp.id, observed_value: toNum(obs), observed_n: toNum(n), kpi_numerator: toNum(numer), kpi_denominator: toNum(denom), guardrail_observations: rec(gr), gate_inputs: rec(gi) });
     if (r.ok) { setSaved(String((r.row as any)?.decision ?? ev.decision)); router.refresh(); }
   };
@@ -82,9 +86,11 @@ function Readout({ exp, onClose }: { exp: ExpRow; onClose: () => void }) {
         {gate.inputs.map((i) => <Field key={i.key} label={`${i.label} (${i.op} ${i.value} ${i.unit})`}><input aria-label={`gate ${i.key}`} type="number" step="any" className={inputCls} value={gi[i.key] ?? ''} onChange={(e) => setGi({ ...gi, [i.key]: e.target.value })} /></Field>)}
         {ev.gates.map((g) => <div key={g.key} className="text-xs" data-testid="gate-decision">Gate decision: <span className={`rounded px-1.5 py-0.5 font-medium ${DECISION_STYLE[g.decision] ?? ''}`}>{LABEL[g.decision] ?? g.decision}</span>{g.missing.length ? ` — missing: ${g.missing.join(', ')}` : ''}</div>)}</fieldset>}
       <div className="mb-3 rounded border p-2 text-sm" data-testid="readout-decision">Decision: <span className={`rounded px-1.5 py-0.5 font-medium ${DECISION_STYLE[ev.decision]}`}>{LABEL[ev.decision]}</span>
+        {check.errors.length > 0 && <div className="mt-1 text-xs text-red-700" role="alert" data-testid="readout-invalid">{check.errors.join(' ')}</div>}
+        {unparsed.length > 0 && <div className="mt-1 text-xs text-amber-700" data-testid="readout-unparsed">Unrecognised guardrail rule(s) cannot be checked: {unparsed.join('; ')}. Readout stays insufficient evidence.</div>}
         {missingAll && <div className="mt-1 text-xs text-amber-700" data-testid="readout-missing">Missing mandatory input: {ev.missing.join('; ')}. No Scale/Change/Stop is recorded without it.</div>}
         <ul className="mt-1 text-xs text-slate-600">{ev.reasons.filter((r) => r.kind !== 'missing').map((r, i) => <li key={i}>{r.label ?? r.kind} {r.op} {r.threshold}: value {r.value} → {r.passed ? 'yes' : 'no'}</li>)}</ul></div>
-      {!saved ? <button data-testid="readout-save" onClick={save} className="w-full rounded bg-slate-900 py-1.5 text-sm text-white disabled:opacity-40">Save readout (decision is set by the server)</button>
+      {!saved ? <button data-testid="readout-save" onClick={save} disabled={check.errors.length > 0} className="w-full rounded bg-slate-900 py-1.5 text-sm text-white disabled:opacity-40">Save readout (decision is set by the server)</button>
         : <button data-testid="readout-followup" onClick={followUp} className="w-full rounded border border-slate-900 py-1.5 text-sm">Create follow-up task</button>}
     </Modal>
   );

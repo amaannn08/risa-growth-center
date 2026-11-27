@@ -5,9 +5,11 @@ export type Scenario = 'base' | 'stretch';
 const pc = (x: number) => rnd(x * 10000) / 100;
 export const rnd = (x: number) => Math.round(x + 1e-9);
 
+/** Assumptions added after the first release: databases seeded earlier fall back to these until migrated (never throws). */
+const FALLBACK: Record<string, number> = { b4_optin: 0.9, b4_holdout: 0.2, b4_wave2_pp: 0 };
 export function lookup(as: Assumption[], key: string, scenario: Scenario): number {
   const hit = as.find((x) => x.key === key && x.scenario === scenario) ?? as.find((x) => x.key === key && x.scenario === 'all');
-  if (!hit) throw new Error(`Missing assumption ${key} (${scenario})`);
+  if (!hit) { if (key in FALLBACK) return FALLBACK[key]!; throw new Error(`Missing assumption ${key} (${scenario})`); }
   return hit.value;
 }
 
@@ -20,6 +22,8 @@ export interface ScenarioResult {
   reach: { pool: number; reached: number; identified: number; identified_of_reach: number; regs_per_identified: number; historical_regs_per_identified: number };
   reference: { spend: number; registered: number; confirmed: number; visitors: number; campaigns: ReferenceCampaign[] };
   bets: BetResult[];
+  /** B4 eligibility chain: confirmed → opted in → minus holdout → treated (never above the requested target) */
+  reminder: { target: number; confirmed: number; optin_rate: number; eligible_optin: number; holdout_share: number; holdout: number; treatable: number; treated: number; waves: number; wave1_pp: number; wave2_pp: number; lift_pp: number; required_eligible: number; required_confirmed: number; feasible: boolean };
   added_regs: number; added_confirmed: number; acquisition_visitors: number; reminder_visitors: number;
   registrations: number; confirmed: number; registered_visitors: number; show_up_of_registrations: number;
   walkins: number; total: number; headline: number;
@@ -34,6 +38,8 @@ export interface Reconciliation {
   /** reference + bets + reserve = cap AND the reserve is not negative (i.e. spend ≤ cap) */ budget_sums_to_cap: boolean;
   reserve_nonnegative: boolean; reach_within_pool: boolean; identified_within_reach: boolean;
   /** B4 treated ≤ confirmed registrants (reminders can only go to opted-in confirmed people) */ reminders_within_confirmed: boolean;
+  /** the requested B4 treatment target fits inside opted-in confirmed registrants after the holdout (else it is capped and flagged) */ reminders_feasible: boolean;
+  reminder: ScenarioResult['reminder'];
   /** raw total − (day1 + day2 − repeat): visitors the day split leaves unallocated (rounding if |gap| ≤ 1) */ day_split_gap: number; day_split_reconciles: boolean;
   warnings: string[];
 }
@@ -64,13 +70,24 @@ function scenarioResult(as: Assumption[], s: Scenario, history: CampaignHistory[
   const pool = g('pool_club_campuses') * g('pool_per_club_campus') + g('pool_catchments') * g('pool_per_catchment') + g('pool_alumni_interest');
   const b1r = g('b1_clubs') * g('b1_regs_per_club');
   const b3r = g('b3_visits') * g('b3_conv');
-  const bets: BetResult[] = [
+  const acq: BetResult[] = [
     { id: 'B1', kind: 'acquisition', extra_regs: rnd(b1r), visitors: rnd(b1r * g('b1_show')), budget: g('b1_budget'), formula: `${g('b1_clubs')} clubs × ${g('b1_regs_per_club')} regs × ${pc(g('b1_show'))}%` },
     { id: 'B2', kind: 'acquisition', extra_regs: g('b2_regs'), visitors: rnd(g('b2_regs') * g('b2_show')), budget: g('b2_budget'), formula: `${g('b2_regs')} regs × ${pc(g('b2_show'))}%` },
     { id: 'B3', kind: 'acquisition', extra_regs: rnd(b3r), visitors: rnd(rnd(b3r) * g('b3_show')), budget: g('b3_budget'), formula: `${g('b3_visits')} visits × ${pc(g('b3_conv'))}% × ${pc(g('b3_show'))}%` },
     { id: 'B5', kind: 'acquisition', extra_regs: g('b5_regs'), visitors: rnd(g('b5_regs') * g('b5_show')), budget: g('b5_budget'), formula: `${g('b5_regs')} regs × ${pc(g('b5_show'))}%` },
-    { id: 'B4', kind: 'turnout', extra_regs: 0, visitors: rnd(g('b4_treated') * g('b4_lift_pp') / 100), budget: g('b4_budget'), formula: `${g('b4_treated')} treated × ${g('b4_lift_pp')} pp` },
   ];
+  // B4 reminders go only to OPTED-IN confirmed registrants, after the holdout is set aside: treated = min(target, ⌊confirmed × opt-in⌋ × (1 − holdout))
+  const confirmedPreB4 = ref.confirmed + rnd(acq.reduce((t, b) => t + b.extra_regs, 0) * g('added_confirm_rate'));
+  const optin = g('b4_optin'), holdoutShare = g('b4_holdout'), target = g('b4_treated');
+  const eligibleOptin = Math.floor(confirmedPreB4 * optin + 1e-9), treatable = Math.floor(eligibleOptin * (1 - holdoutShare) + 1e-9);
+  const treated = Math.min(target, treatable);
+  // two-wave cadence (pre-event + day-of): the 2nd wave raises visits per treated person, never the treated count
+  const wave1 = g('b4_lift_pp'), wave2 = g('b4_wave2_pp'), liftPp = wave1 + wave2;
+  const reminderInfo = {
+    target, confirmed: confirmedPreB4, optin_rate: optin, eligible_optin: eligibleOptin, holdout_share: holdoutShare, holdout: eligibleOptin - treatable, treatable, treated, waves: wave2 > 0 ? 2 : 1, wave1_pp: wave1, wave2_pp: wave2, lift_pp: liftPp,
+    required_eligible: Math.ceil(target / (1 - holdoutShare) - 1e-9), required_confirmed: Math.ceil(target / (1 - holdoutShare) / optin - 1e-9), feasible: target <= treatable,
+  };
+  const bets: BetResult[] = [...acq, { id: 'B4', kind: 'turnout', extra_regs: 0, visitors: rnd(treated * liftPp / 100), budget: g('b4_budget'), formula: wave2 > 0 ? `${treated} treated × (${wave1} pp pre-event + ${wave2} pp day-of) = ${rnd(liftPp * 10) / 10} pp` : `${treated} treated × ${wave1} pp` }];
   const acqVisitors = bets.filter((b) => b.kind === 'acquisition').reduce((t, b) => t + b.visitors, 0);
   const reminder = bets.find((b) => b.id === 'B4')!.visitors;
   const addedRegs = bets.reduce((t, b) => t + b.extra_regs, 0);
@@ -91,7 +108,7 @@ function scenarioResult(as: Assumption[], s: Scenario, history: CampaignHistory[
       pool, reached: g('reach_dedup'), identified, identified_of_reach: identified / g('reach_dedup'),
       regs_per_identified: registrations / identified, historical_regs_per_identified: g('historical_regs_per_identified'),
     },
-    reference: ref, bets, added_regs: addedRegs, added_confirmed: addedConfirmed, acquisition_visitors: acqVisitors, reminder_visitors: reminder,
+    reference: ref, bets, reminder: reminderInfo, added_regs: addedRegs, added_confirmed: addedConfirmed, acquisition_visitors: acqVisitors, reminder_visitors: reminder,
     registrations, confirmed, registered_visitors: registeredVisitors, show_up_of_registrations: registeredVisitors / registrations,
     walkins, total, headline: Math.floor(total / 50) * 50,
     spend, bets_spend: betsSpend, reserve: cap - spend, cap,
@@ -116,7 +133,7 @@ export function strategyModel(
   const base = scenarioResult(assumptions, 'base', history, plan, v2025);
   const stretch = scenarioResult(assumptions, 'stretch', history, plan, v2025);
   const rec = (r: ScenarioResult): Reconciliation => {
-    const treated = lookup(assumptions, 'b4_treated', r.scenario);
+    const treated = r.reminder.treated, rm = r.reminder;
     const gap = r.total - r.capacity.weekend_unique;
     const flags = {
       reserve_nonnegative: r.reserve >= 0,
@@ -124,6 +141,7 @@ export function strategyModel(
       reach_within_pool: r.reach.reached <= r.reach.pool,
       identified_within_reach: r.reach.identified <= r.reach.reached,
       reminders_within_confirmed: treated <= r.confirmed,
+      reminders_feasible: rm.feasible,
       day_split_reconciles: Math.abs(gap) <= 1,
     };
     const warnings = [
@@ -131,9 +149,10 @@ export function strategyModel(
       !flags.reach_within_pool && `Assumed deduplicated reach ${r.reach.reached.toLocaleString('en-US')} exceeds the working pool ${r.reach.pool.toLocaleString('en-US')}.`,
       !flags.identified_within_reach && `Identified people ${r.reach.identified.toLocaleString('en-US')} exceed reach ${r.reach.reached.toLocaleString('en-US')}.`,
       !flags.reminders_within_confirmed && `B4 treats ${treated.toLocaleString('en-US')} people but only ${r.confirmed.toLocaleString('en-US')} are confirmed registrants.`,
+      !flags.reminders_feasible && `B4 target of ${rm.target.toLocaleString('en-US')} treated needs ≥ ${rm.required_eligible.toLocaleString('en-US')} opted-in eligible people at a ${Math.round(rm.holdout_share * 100)}% holdout (≥ ${rm.required_confirmed.toLocaleString('en-US')} confirmed at ${Math.round(rm.optin_rate * 100)}% opt-in); only ${rm.confirmed.toLocaleString('en-US')} are confirmed (${rm.eligible_optin.toLocaleString('en-US')} opted in). Treated is capped at ${rm.treated.toLocaleString('en-US')}.`,
       !flags.day_split_reconciles && `Day split (${r.capacity.day1} + ${r.capacity.day2} − ${r.capacity.repeat} = ${r.capacity.weekend_unique}) differs from the modeled total ${r.total} by ${gap}.`,
     ].filter((w): w is string => !!w);
-    return { raw_total: r.total, headline: r.headline, reference_spend: r.reference.spend, bets_spend: r.bets_spend, reserve: r.reserve, cap: r.cap, ...flags, day_split_gap: gap, warnings };
+    return { reminder: rm, raw_total: r.total, headline: r.headline, reference_spend: r.reference.spend, bets_spend: r.bets_spend, reserve: r.reserve, cap: r.cap, ...flags, day_split_gap: gap, warnings };
   };
   const sens = (r: ScenarioResult, s: Scenario) => ({
     no_reminders_no_walkins: r.total - r.reminder_visitors - r.walkins,

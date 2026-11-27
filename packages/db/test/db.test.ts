@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { snapshot } from '@gc/core';
 import {
   MutationError, addCheckin, addDailyMarketing, addPerson, addRegistration, addTargetVersion, applyMutation, changeRegistrationStatus, confirmDraft, createDraft,
-  createDb, deleteCampaign, discardDraft, loadDataset, resetToSeed, seedDb, updateCampaign, verifyAgainstReference, withClient, type Db,
+  createDb, deleteCampaign, discardDraft, loadDataset, migrate, readConsistent, resetToSeed, withSnapshot, seedDb, updateCampaign, verifyAgainstReference, withClient, type Db,
 } from '../src';
 
 let db: Db;
@@ -163,3 +163,130 @@ describe('evidence + audit client id', () => {
   });
 });
 
+
+describe('migration 0003: legacy string guardrails → typed records (public + seed)', () => {
+  const LEGACY: Record<string, string[]> = {
+    B1: ['confirmed ≥ 85% at T−14', 'incremental visitor cost ≤ ₹180'], B2: ['duplicate/ineligible ≤ 5%', 'confirmed ≥ 80% by T−14'],
+    B3: ['abuse ≤ 5%', '≤ ₹180 / incremental visitor'], B4: ['delivery ≥ 90%', 'opt-out ≤ 2%'], B5: ['T−7 confirmation ≥ 85%', 'marginal visitor cost ≤ ₹200'],
+  };
+  const guardrails = async (schema: string) => Object.fromEntries((await db.query(`SELECT bet_id, guardrails FROM ${schema}.experiments ORDER BY bet_id`)).map((r: any) => [r.bet_id, r.guardrails]));
+  const readout = async (id: number, input: Record<string, unknown>) => {
+    await applyMutation(db, 'experiment', 'readout', { id, ...input });
+    return (await db.query('SELECT decision, observation FROM experiments WHERE id=$1', [id]))[0] as any;
+  };
+  const toPreMigration = async () => {
+    for (const s of ['public', 'seed']) for (const [bet, g] of Object.entries(LEGACY)) await db.query(`UPDATE ${s}.experiments SET guardrails=$2::text::jsonb, observation=null, decision=null, status='planned' WHERE bet_id=$1`, [bet, JSON.stringify(g)]);
+    await db.query(`DELETE FROM _gc_migrations WHERE name='0003_typed_experiment_guardrails.sql'`);
+  };
+
+  it('maps all five shipped rule sets on both tables; idempotent; unknown strings untouched', async () => {
+    await toPreMigration();
+    await db.query(`UPDATE public.experiments SET guardrails='["some custom rule"]'::jsonb WHERE bet_id='B1'`);
+    expect((await guardrails('public')).B3).toEqual(LEGACY.B3);
+    await migrate(db);
+    for (const s of ['public', 'seed']) {
+      const g = await guardrails(s);
+      expect(g.B3).toEqual([{ key: 'abuse_pct', label: 'abuse ≤ 5%', op: '<=', value: 5, hard: true }, { key: 'visitor_cost_inr', label: '≤ ₹180 / incremental visitor', op: '<=', value: 180, hard: true }]);
+      expect(g.B5[0]).toMatchObject({ key: 'confirmation_pct', op: '>=', value: 85, stop_op: '<', stop_value: 75 });
+      for (const b of ['B2', 'B4', 'B5']) expect(g[b].every((x: any) => typeof x === 'object' && x.key)).toBe(true);
+      if (s === 'public') expect(g.B1).toEqual(['some custom rule']); else expect(g.B1[1]).toMatchObject({ key: 'visitor_cost_inr', value: 180 });
+    }
+    await db.query(`DELETE FROM _gc_migrations WHERE name='0003_typed_experiment_guardrails.sql'`);
+    await migrate(db); // re-run: no change, no error
+    expect((await guardrails('public')).B3[0]).toMatchObject({ key: 'abuse_pct' });
+  });
+
+  it('after migration + reset, B3 at 6% abuse is Stop (not Scale) and B5 <75% confirmation is Stop with reserve held', async () => {
+    await toPreMigration(); await migrate(db); await resetToSeed(db, 'system');
+    const b3 = await readout(3, { observed_value: 30, observed_n: 250, guardrail_observations: { abuse_pct: 6, visitor_cost_inr: 100 } });
+    expect(b3.decision).toBe('stop');
+    const rel = { forecast_extra_visitors: 45, forecast_visitor_cost_inr: 140 };
+    const b5 = (c: number) => readout(5, { observed_value: 12, observed_n: 500, guardrail_observations: { confirmation_pct: c, marginal_visitor_cost_inr: 150 }, gate_inputs: rel });
+    const stop = await b5(70);
+    expect(stop.decision).toBe('stop'); expect(stop.observation.gates[0].decision).toBe('hold');
+    expect(stop.observation.gates[0].reasons.some((r: any) => /blocked/.test(r.label))).toBe(true);
+    expect((await b5(80)).decision).toBe('change');
+    const ok = await b5(90);
+    expect(ok.decision).toBe('scale'); expect(ok.observation.gates[0].decision).toBe('release');
+  });
+
+  it('an unrecognised legacy rule on an unmigrated row means insufficient evidence, never a decision', async () => {
+    await db.query(`UPDATE public.experiments SET guardrails='["abuse ≤ 5%"]'::jsonb WHERE bet_id='B3'`);
+    const r = await readout(3, { observed_value: 30, observed_n: 250 });
+    expect(r.decision).toBe('insufficient_sample'); expect(r.observation.missing.join(' ')).toMatch(/unrecognised guardrail/);
+  });
+
+  it('rejects inconsistent observations; computes the ratio server-side', async () => {
+    const g = { abuse_pct: 1, visitor_cost_inr: 100 };
+    await expect(applyMutation(db, 'experiment', 'readout', { id: 3, observed_value: 90, kpi_numerator: 1, kpi_denominator: 250, observed_n: 250, guardrail_observations: g })).rejects.toThrow(/conflicts with its counts/);
+    await expect(applyMutation(db, 'experiment', 'readout', { id: 3, kpi_numerator: 300, kpi_denominator: 250, observed_n: 250, guardrail_observations: g })).rejects.toThrow(/cannot exceed/);
+    await expect(applyMutation(db, 'experiment', 'readout', { id: 3, kpi_numerator: 5, observed_n: 250, guardrail_observations: g })).rejects.toThrow(/both/);
+    await expect(applyMutation(db, 'experiment', 'readout', { id: 3, observed_value: 140, observed_n: 250, guardrail_observations: g })).rejects.toThrow(/between 0 and 100/);
+    await expect(applyMutation(db, 'experiment', 'readout', { id: 3, observed_value: 20, observed_n: 250, guardrail_observations: { abuse_pct: 140, visitor_cost_inr: 1 } })).rejects.toThrow(/out of range/);
+    const ok = await readout(3, { observed_value: 20, kpi_numerator: 50, kpi_denominator: 250, observed_n: 250, guardrail_observations: g });
+    expect(Number((await db.query('SELECT observed_value FROM experiments WHERE id=3'))[0]!.observed_value)).toBeCloseTo(20);
+    expect(ok.decision).toBe('scale');
+    await readout(3, { kpi_numerator: 1, kpi_denominator: 250, observed_n: 250, guardrail_observations: g });
+    expect(Number((await db.query('SELECT observed_value FROM experiments WHERE id=3'))[0]!.observed_value)).toBeCloseTo(0.4);
+  });
+});
+
+describe('migration 0004: reminder eligibility assumptions (public + seed)', () => {
+  const val = async (s: string, k: string, sc: string) => (await db.query(`SELECT value::float8 AS v FROM ${s}.plan_assumptions WHERE key=$1 AND scenario=$2::scenario`, [k, sc]))[0]?.v;
+  it('adds opt-in/holdout, revises the stretch target and day split on a pre-migration snapshot; idempotent; edited rows untouched', async () => {
+    for (const s of ['public', 'seed']) {
+      await db.query(`DELETE FROM ${s}.plan_assumptions WHERE key IN ('b4_optin','b4_holdout','b4_wave2_pp')`);
+      await db.query(`UPDATE ${s}.plan_assumptions SET value=2500 WHERE key='b4_treated' AND scenario='stretch'`);
+      await db.query(`UPDATE ${s}.plan_assumptions SET value=1600 WHERE key='day2_visitors' AND scenario='stretch'`);
+    }
+    await db.query(`UPDATE public.plan_assumptions SET value=1650 WHERE key='day2_visitors' AND scenario='stretch'`); // a user edit must survive
+    await db.query(`DELETE FROM _gc_migrations WHERE name='0004_reminder_eligibility_assumptions.sql'`);
+    await migrate(db);
+    for (const s of ['public', 'seed']) {
+      expect([await val(s, 'b4_optin', 'base'), await val(s, 'b4_optin', 'stretch'), await val(s, 'b4_holdout', 'base'), await val(s, 'b4_holdout', 'stretch')]).toEqual([0.9, 0.9, 0.2, 0.2]);
+      expect(await val(s, 'b4_treated', 'stretch')).toBe(2229); expect([await val(s, 'b4_wave2_pp', 'base'), await val(s, 'b4_wave2_pp', 'stretch')]).toEqual([0, 0.7]);
+    }
+    expect(await val('seed', 'day2_visitors', 'stretch')).toBe(1600); expect(await val('public', 'day2_visitors', 'stretch')).toBe(1650);
+    await db.query(`DELETE FROM _gc_migrations WHERE name='0004_reminder_eligibility_assumptions.sql'`);
+    await migrate(db);
+    expect(await val('public', 'b4_treated', 'stretch')).toBe(2229);
+    await resetToSeed(db, 'system');
+    expect(await val('public', 'day2_visitors', 'stretch')).toBe(1600);
+  });
+});
+
+describe('one transaction snapshot per read (revision-overlap)', () => {
+  it('a write that lands while a snapshot is open is invisible to it: revision, dataset and management rows all agree', async () => {
+    const r0 = await rev(), t0 = await count('tasks');
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const reader = readConsistent(db, async (q, meta) => { await gate; return { rows: Number((await q.query('SELECT count(*)::int AS n FROM tasks'))[0]!.n), rev: meta.data_revision }; });
+    // the write is issued while the read snapshot is open (and held back until it closes)
+    const writer = addDailyMarketing(db, { campaign_id: 'C02', activity_date: '2025-04-16', marketing_spend_inr: 1000 }).then(() => applyMutation(db, 'task', 'create', { title: 'during read' }));
+    release();
+    const snap = await reader;
+    expect(snap.meta.data_revision).toBe(r0);
+    expect(snapshot(snap.ds, '2025-04-20').overall.marketing_spend_inr).toBe(274000); // dataset of revision r0, not r0+1's 275,000
+    expect(snap.mgmt.tasks).toHaveLength(t0); expect(snap.extra.rows).toBe(t0); expect(snap.extra.rev).toBe(r0);
+    await writer;
+    const after = await readConsistent(db);
+    expect(after.meta.data_revision).toBe(r0 + 2);
+    expect(snapshot(after.ds, '2025-04-20').overall.marketing_spend_inr).toBe(275000);
+    expect(after.ds.revision).toBe(after.meta.data_revision); expect(after.mgmt.tasks).toHaveLength(t0 + 1);
+  });
+  it('the dataset cache is keyed by the snapshot\'s own revision (no stale or mislabeled reuse)', async () => {
+    const a = await readConsistent(db);
+    await addDailyMarketing(db, { campaign_id: 'C02', activity_date: '2025-04-16', marketing_spend_inr: 500 });
+    const b = await readConsistent(db);
+    expect(b.meta.data_revision).toBe(a.meta.data_revision + 1);
+    expect(snapshot(b.ds, '2025-04-20').overall.marketing_spend_inr).toBe(274500);
+    expect(snapshot(a.ds, '2025-04-20').overall.marketing_spend_inr).toBe(274000);
+  });
+  it('on Postgres the snapshot is REPEATABLE READ READ ONLY, set before the first read', async () => {
+    const seen: string[] = [];
+    const q = { query: async (t: string) => { seen.push(t); return [] as any[]; } };
+    const fake = { kind: 'postgres', query: q.query, tx: (fn: any) => fn(q), close: async () => {} } as unknown as Db;
+    await withSnapshot(fake, async (x) => { await x.query('SELECT 1'); });
+    expect(seen[0]).toBe('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY'); expect(seen[1]).toBe('SELECT 1');
+  });
+});

@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { toast } from 'sonner';
+import { itemProvenance } from '@gc/core';
 import { ctxStore } from './chatStore';
 
 type DraftState = { status: 'pending' | 'confirmed' | 'discarded'; ref?: string };
@@ -39,7 +40,7 @@ export function DraftCard({ out }: { out: any }) {
       <div className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-amber-900">Draft {isTask ? 'task' : 'campaign change'} · {st.status === 'pending' ? 'needs your confirmation' : st.status}</div>
       {isTask ? <div className="space-y-1">{field('title', 'Title')}{field('owner_id', 'Owner')}{field('due_date', 'Due', 'date')}{field('priority', 'Priority')}</div>
         : <div className="text-xs">{out.preview}<div className="text-slate-600">{String(payload.reason ?? '')}</div></div>}
-      {out.evidence?.length > 0 && <div className="mt-1 flex flex-wrap gap-1">{out.evidence.map((e: any, i: number) => <span key={i} className="rounded bg-white px-1 text-[10px] text-slate-600">{e.tool} · {e.metric}: {String(e.value)}</span>)}</div>}
+      {out.evidence?.length > 0 && <div className="mt-1 flex flex-wrap gap-1">{out.evidence.map((e: any, i: number) => <span key={i} data-testid="draft-evidence" className={`rounded px-1 text-[10px] ${e.verified === false ? 'bg-amber-100 text-amber-900' : 'bg-white text-slate-600'}`}>{e.tool} · {e.metric}: {String(e.value)}{itemProvenance(e)}</span>)}</div>}
       {st.status === 'pending' && <div className="mt-2 flex gap-2">
         <button disabled={busy} onClick={() => act('confirm')} className="rounded bg-slate-900 px-2.5 py-1 text-xs text-white disabled:opacity-50">Confirm</button>
         <button disabled={busy} onClick={() => act('discard')} className="rounded border px-2.5 py-1 text-xs">Discard</button></div>}

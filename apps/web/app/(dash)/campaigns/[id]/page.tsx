@@ -27,7 +27,7 @@ export default async function CampaignDetail({ params, searchParams }: { params:
     return { week: w.from.slice(5), registrations: p.registered_people, clicks: p.clicks, spend: p.marketing_spend_inr, partial: weekIsRunning(w), through: w.through };
   });
   const cohorts = showUpByRegistrationWeek(ds, asOf, id);
-  const tasks = await ctx.db.query<any>(`SELECT t.id, t.title, t.status::text AS status, t.priority::text AS priority, t.due_date::text AS due_date, t.experiment_id FROM tasks t WHERE t.campaign_id=$1 ORDER BY t.id`, [id]);
+  const tasks = ctx.mgmt.tasks.filter((t) => t.campaign_id === id);
   const recent = ds.daily.filter((r) => r.campaign_id === id && r.activity_date <= asOf).slice(-14).reverse();
   const campaigns = ds.campaignIds.map((c) => ({ campaign_id: c, campaign_name: ds.campaigns[c]!.campaign_name }));
   const st = f.latest_status_by_person_distinct_within_status;

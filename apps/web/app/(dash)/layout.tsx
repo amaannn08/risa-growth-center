@@ -2,14 +2,13 @@ import { Suspense } from 'react';
 import { Nav } from '@/components/Nav';
 import { CopilotDock } from '@/components/copilot/Dock';
 import { TopBar } from '@/components/TopBar';
-import { getShellMeta } from '@/lib/data';
-import { getDb, loadDataset } from '@gc/db';
+import { getShell } from '@/lib/data';
 import { coverageEnd, coverageStart } from '@gc/core';
 
 export const dynamic = 'force-dynamic';
 
 export default async function DashLayout({ children }: { children: React.ReactNode }) {
-  const [meta, { ds }] = await Promise.all([getShellMeta(), getDb().then((db) => loadDataset(db))]);
+  const { meta, ds } = await getShell();
   return (
     <div className="flex min-h-screen">
       <aside className="sticky top-0 hidden h-screen w-52 shrink-0 border-r bg-slate-50 md:block">

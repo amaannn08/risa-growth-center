@@ -10,13 +10,8 @@ export const dynamic = 'force-dynamic';
 
 export default async function Execution({ searchParams }: { searchParams: SP }) {
   const ctx = await getCtx(searchParams);
-  const { db, ds } = ctx;
-  const [tasks, exps, team, bets] = await Promise.all([
-    db.query<TaskRow>(`SELECT id, title, description, campaign_id, owner_id, due_date::text AS due_date, status::text AS status, priority::text AS priority, experiment_id, bet_id, insight_id, evidence, created_via::text AS created_via FROM tasks ORDER BY id`),
-    db.query<ExpRow>(`SELECT id, bet_id, name, primary_kpi, kpi_unit, min_sample, scale_op, scale_value::float8 AS scale_value, stop_op, stop_value::float8 AS stop_value, change_rule, stop_note, readout_date::text AS readout_date, status::text AS status, observed_value::float8 AS observed_value, observed_n, decision, owner_id, guardrails, observation FROM experiments ORDER BY id`),
-    db.query<{ owner_id: string; name: string }>('SELECT owner_id, name FROM team_members ORDER BY owner_id'),
-    db.query<{ id: string; name: string }>('SELECT id, name FROM bets ORDER BY rank'),
-  ]);
+  const { ds } = ctx;
+  const { tasks, experiments: exps, team, bets } = ctx.mgmt as { tasks: TaskRow[]; experiments: ExpRow[]; team: { owner_id: string; name: string }[]; bets: { id: string; name: string }[] };
   const owners = team.map((t) => ({ value: t.owner_id, label: t.name }));
   const campaigns = ds.campaignIds.map((c) => ({ value: c, label: `${c} · ${ds.campaigns[c]!.campaign_name}` }));
   const rows: CampRow[] = ds.campaignIds.map((id) => {

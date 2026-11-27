@@ -1,5 +1,6 @@
 /**
- * 55 eval items: 34 original (plan §10) + 20 independent red-team questions from the round-1 grader review (ids 35–54, with their verified answers) + 1 live-LLM clarification probe (id 55). Each item has:
+ * 59 eval items: 34 original (plan §10) + 20 independent red-team questions from the round-1 grader review (ids 35–54, with their verified answers) + 1 live-LLM clarification probe (id 55)
+ * + 4 round-3 regression cases for the deployed-eval misses and review findings (ids 56–59: weekly cutoff series, paused-campaign wording, same-message draft, resolved clarification follow-up). Each item has:
  *  - `calls`: deterministic tool calls used by test/tools.test.ts (no LLM) — they prove the ground truth independently of the model;
  *  - `tools`: any-of tools the LLM is expected to call (eval runner);
  *  - `must` / `mustNot`: numeric tokens are matched numerically (tolerance by decimals), other strings case-insensitively
@@ -155,6 +156,21 @@ export const RED_TEAM: EvalItem[] = [
     must: ['1,430', '/confirm/i', '2026-02-06|6 Feb'], mustNot: ['/(task|it) (has been|was|is now) created/i'], source: 'review Q20: Saturday 1,430 distinct visitors; draft only' },
   { id: 55, q: 'Was that campaign worth the money?', noTools: true, tools: [], calls: [], must: ['/which (campaigns?|one)|what.*(campaign|measure|metric)/i'], mustNot: ['₹\\d'], source: 'live-LLM clarification probe: no campaign, metric or date → ask one short question and offer options (prompt rule 14); no tools' },
 ];
+
+// ---------- round 3: regression cases (ids 56–59) ----------
+RED_TEAM.push(
+  { id: 56, q: 'Give me weekly Paid Social registrations through Wed 5 Mar, including the running week. Which weeks are partial?', context: { asOf: '2025-03-05' },
+    tools: ['get_trend'], calls: [{ tool: 'get_trend', args: { metric: 'registrations', campaign_id: 'C02', granularity: 'week', from: '2025-02-24' } }],
+    must: ['105', '16', '/partial|running|incomplete/i'], source: 'round-2 review Q18: 24 Feb–2 Mar = 105 (full week); 3–5 Mar = 16 (running week, 3 days). get_trend honours the as-of cutoff and flags the partial period' },
+  { id: 57, q: 'Which campaigns are currently running? Say which ones are not.', setup: [{ entity: 'campaign', action: 'update', input: { id: 'C02', patch: { status: 'paused' } } }],
+    tools: ['list_campaigns'], calls: [{ tool: 'list_campaigns', args: {} }], must: ['Paid Social', '/paused/i'], source: 'deployed eval #29 wording miss: the excluded campaign must be named with its status word (list_campaigns.not_active)' },
+  { id: 58, q: 'Why did confirmed people not show up? Then draft a P2 task for Dev to review the no-show follow-up.', kind: 'draft', tools: ['describe_data', 'get_funnel', 'propose_task'],
+    calls: [{ tool: 'describe_data', args: { topic: 'cancel' } }, { tool: 'get_funnel', args: {} }, { tool: 'propose_task', args: { title: 'Review the no-show follow-up for confirmed registrants', priority: 'p2', owner_id: 'Dev', evidence: [{ tool: 'get_funnel', metric: 'confirmed_no_shows', value: 575 }] } }],
+    must: ['575', '/no (reason|field)|not in (the )?data|cannot|not available|not recorded/i', '/confirm/i'], mustNot: ['/(task|it) (has been|was|is now) created/i'], source: 'deployed eval #19 miss: a task requested in the SAME message must be drafted in that turn; 575 confirmed no-shows (2,500 − 1,925)' },
+  { id: 59, q: 'Which of those two spent less by March 21, 2025?', before: ['Compare Organic Search and Community Groups.'],
+    tools: ['compare_campaigns', 'get_spend_ledger', 'get_funnel'], calls: [{ tool: 'compare_campaigns', args: { metric: 'net_spend', as_of: '2025-03-21', campaign_ids: ['C06', 'C07'], order: 'asc' } }],
+    must: ['11,200', '/tie|tied|same|equal|neither|both/i'], mustNot: ['/which (campaigns|two)|what (measure|metric)/i'], source: 'round-2 review Q10: a fully resolved follow-up (pair from the thread, measure = spend, date given) must not be re-asked; C06 and C07 tie at ₹11,200' },
+);
 ITEMS.push(...RED_TEAM);
 
 export const itemById = (id: number) => ITEMS.find((i) => i.id === id)!;

@@ -1,7 +1,7 @@
 'use client';
 import { useState } from 'react';
 import type { UIMessage } from 'ai';
-import { executedFrom, groundingCheck, groundingLabel } from '@gc/ai/src/grounding';
+import { groundingFromCalls, groundingLabel, type TurnCall } from '@gc/ai/src/grounding';
 import { Markdown } from './Markdown';
 import { DraftCard } from './DraftCard';
 
@@ -47,13 +47,13 @@ export function MessageView({ m, history }: { m: UIMessage; history: UIMessage[]
   if (m.role === 'user') return <div className="ml-8 rounded-lg bg-slate-900 px-3 py-1.5 text-sm text-white">{text}</div>;
   const drafts = parts.filter((p) => isToolPart(p) && p.state === 'output-available' && p.output?.draft_id);
   const upto = history.slice(0, history.indexOf(m) + 1);
-  const outputs = upto.flatMap((x) => ((x.parts ?? []) as any[]).filter((p) => isToolPart(p) && p.output).map((p) => p.output));
-  // citations may only reference tools executed in THIS assistant turn (this message); user-typed numbers are scenario inputs, not evidence
-  const executed = executedFrom(parts.filter((p) => isToolPart(p) && p.output).map((p) => ({ name: toolName(p), output: p.output })));
-  const g = text ? groundingCheck(text, outputs, upto.filter((x) => x.role === 'user').map((x) => ((x.parts ?? []) as any[]).map((p) => p.text ?? '').join('')), executed) : null;
+  // Badge and citations come from the SERVER-ISSUED evidence refs of the tool calls in THIS assistant turn only (never numeric overlap with earlier turns).
+  // A tool part without a server-issued evidence block cannot support any figure or citation. User-typed numbers are scenario inputs, not evidence.
+  const calls: TurnCall[] = parts.filter((p) => isToolPart(p) && p.output?._evidence).map((p) => p.output._evidence as TurnCall & { tool: string });
+  const g = text ? groundingFromCalls(text, calls, upto.filter((x) => x.role === 'user').map((x) => ((x.parts ?? []) as any[]).map((p) => p.text ?? '').join(''))) : null;
   return (
     <div className="mr-4" data-testid="assistant-msg">
-      {text && <div className="rounded-lg bg-slate-100 px-3 py-2"><Markdown text={text} /></div>}
+      {text && <div className="rounded-lg bg-slate-100 px-3 py-2"><Markdown text={text} unverified={g ? new Set(g.bad_citations) : undefined} /></div>}
       {drafts.map((p, i) => <DraftCard key={p.output.draft_id + i} out={p.output} />)}
       <Sources parts={parts} />
       {g && (g.checked > 0 || g.bad_citations.length > 0) && <div data-testid="grounding" className={`mt-1 text-[11px] ${g.ok ? 'text-emerald-700' : 'text-amber-700'}`} title={g.ok ? '' : 'Figures not found in a tool result, or citations naming a tool that did not run in this turn'}>{groundingLabel(g)}</div>}

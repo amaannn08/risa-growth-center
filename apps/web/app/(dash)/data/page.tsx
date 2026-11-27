@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { fmtInt } from '@gc/core';
+import type { Q } from '@gc/db';
 import { getCtx, type SP } from '@/lib/data';
 import { PageTitle, Panel, td, th } from '@/components/kit';
 import { DataForms } from '@/components/DataForms';
@@ -27,11 +28,36 @@ const diffOf = (b: any, a: any) => {
   return Object.keys(a ?? {}).filter((k) => JSON.stringify(a[k]) !== JSON.stringify(b?.[k])).map((k) => `${k}: ${JSON.stringify(b?.[k])} → ${JSON.stringify(a[k])}`).join('; ').slice(0, 300);
 };
 
-export default async function DataPage({ searchParams }: { searchParams: SP }) {
-  const ctx = await getCtx(searchParams);
-  const sp = ctx.sp;
+/** The paged table read; runs inside the page's single snapshot transaction (same state as the revision shown in the title). */
+async function readTab(q: Q, sp: Record<string, string | undefined>) {
   const tab = sp.tab === 'log' || TABS[sp.tab ?? ''] ? sp.tab! : 'daily';
   const page = Math.max(1, Number(sp.page ?? 1) || 1);
+  if (tab === 'log') {
+    const total = (await q.query<{ n: number }>('SELECT count(*)::int AS n FROM audit_log'))[0]?.n ?? 0;
+    const rows = await q.query<any>(`SELECT id, ${IST('at')} AS at, actor::text AS actor, entity, entity_id, action::text AS action, before, after, data_revision, client_id FROM audit_log ORDER BY id DESC LIMIT ${PAGE} OFFSET ${(page - 1) * PAGE}`);
+    return { tab, page, total, rows };
+  }
+  const c = TABS[tab]!;
+  const where: string[] = [], params: unknown[] = [];
+  const add = (sql: string, v: unknown) => { params.push(v); where.push(sql.replace('$$', `$${params.length}`)); };
+  if (sp.campaign && c.campaignCol) add(`${c.campaignCol} = $$`, sp.campaign);
+  if (sp.status && c.statusCol) add(`${c.statusCol}::text = $$`, sp.status);
+  if (sp.date && c.dateCol) add(c.dateIsTs ? `(${c.dateCol} at time zone 'Asia/Kolkata')::date = $$::date` : `${c.dateCol} = $$::date`, sp.date);
+  if (sp.q && c.qCols) {
+    params.push(`%${sp.q}%`);
+    where.push(`(${c.qCols.map((x) => `${x} ILIKE $${params.length}`).join(' OR ')})`);
+  }
+  const w = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const sel = c.cols.map((k) => (c.ts?.includes(k) ? `${IST(k)} AS ${k}` : k)).join(', ');
+  const total = (await q.query<{ n: number }>(`SELECT count(*)::int AS n FROM ${c.table} ${w}`, params))[0]?.n ?? 0;
+  const rows = await q.query<any>(`SELECT ${sel} FROM ${c.table} ${w} ORDER BY ${c.order} LIMIT ${PAGE} OFFSET ${(page - 1) * PAGE}`, params);
+  return { tab, page, total, rows };
+}
+
+export default async function DataPage({ searchParams }: { searchParams: SP }) {
+  const ctx = await getCtx(searchParams, readTab);
+  const sp = ctx.sp;
+  const { tab, page, total, rows } = ctx.extra;
   const campaigns = ctx.ds.campaignIds.map((c) => ({ campaign_id: c, campaign_name: ctx.ds.campaigns[c]!.campaign_name }));
   const link = (extra: Record<string, string | undefined>) => {
     const p = new URLSearchParams();
@@ -39,29 +65,14 @@ export default async function DataPage({ searchParams }: { searchParams: SP }) {
     return `/data?${p}`;
   };
 
-  let body: React.ReactNode, total = 0;
+  let body: React.ReactNode;
   if (tab === 'log') {
-    total = (await ctx.db.query<{ n: number }>('SELECT count(*)::int AS n FROM audit_log'))[0]?.n ?? 0;
-    const rows = await ctx.db.query<any>(`SELECT id, ${IST('at')} AS at, actor::text AS actor, entity, entity_id, action::text AS action, before, after, data_revision, client_id FROM audit_log ORDER BY id DESC LIMIT ${PAGE} OFFSET ${(page - 1) * PAGE}`);
     body = (
       <table className="w-full" data-testid="audit-table"><thead><tr><th className={th}>Rev</th><th className={th}>When (IST)</th><th className={th}>Actor</th><th className={th} title="anonymous per-request client id (hashed IP)">Client</th><th className={th}>Action</th><th className={th}>Entity</th><th className={th}>Change (before → after)</th></tr></thead>
         <tbody>{rows.map((r) => <tr key={r.id} className="border-t align-top"><td className={td}>{r.data_revision}</td><td className={`${td} whitespace-nowrap`}>{r.at}</td><td className={td}>{r.actor}</td><td className={`${td} font-mono text-xs text-slate-500`}>{r.client_id ?? '—'}</td><td className={td}>{r.action}</td><td className={td}>{r.entity} <span className="text-slate-500">{r.entity_id}</span></td><td className={`${td} text-xs`}>{diffOf(r.before, r.after)}</td></tr>)}</tbody></table>
     );
   } else {
     const c = TABS[tab]!;
-    const where: string[] = [], params: unknown[] = [];
-    const add = (sql: string, v: unknown) => { params.push(v); where.push(sql.replace('$$', `$${params.length}`)); };
-    if (sp.campaign && c.campaignCol) add(`${c.campaignCol} = $$`, sp.campaign);
-    if (sp.status && c.statusCol) add(`${c.statusCol}::text = $$`, sp.status);
-    if (sp.date && c.dateCol) add(c.dateIsTs ? `(${c.dateCol} at time zone 'Asia/Kolkata')::date = $$::date` : `${c.dateCol} = $$::date`, sp.date);
-    if (sp.q && c.qCols) {
-      params.push(`%${sp.q}%`);
-      where.push(`(${c.qCols.map((q) => `${q} ILIKE $${params.length}`).join(' OR ')})`);
-    }
-    const w = where.length ? `WHERE ${where.join(' AND ')}` : '';
-    const sel = c.cols.map((k) => (c.ts?.includes(k) ? `${IST(k)} AS ${k}` : k)).join(', ');
-    total = (await ctx.db.query<{ n: number }>(`SELECT count(*)::int AS n FROM ${c.table} ${w}`, params))[0]?.n ?? 0;
-    const rows = await ctx.db.query<any>(`SELECT ${sel} FROM ${c.table} ${w} ORDER BY ${c.order} LIMIT ${PAGE} OFFSET ${(page - 1) * PAGE}`, params);
     body = (
       <>
         <form className="mb-3 flex flex-wrap items-end gap-2 text-xs" action="/data">

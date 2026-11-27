@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { TOOL_NAMES, TOOLS, runTool } from './tools';
 import { systemPrompt } from './systemPrompt';
+import { stripEvidence } from './evidence';
 import { deepseekFetch, modelName, type ToolLogEntry } from './agent';
 import type { ToolEnv } from './env';
 
@@ -44,7 +45,7 @@ export async function runJsonLoop(env: ToolEnv, history: { role: 'user' | 'assis
     const t0 = Date.now();
     const output = await runTool(env, step.tool, step.args);
     log.push({ name: step.tool, args: step.args, output, ms: Date.now() - t0 });
-    msgs.push({ role: 'assistant', content: JSON.stringify(step) }, { role: 'user', content: `TOOL RESULT ${step.tool}: ${JSON.stringify(output).slice(0, 12000)}` });
+    msgs.push({ role: 'assistant', content: JSON.stringify(step) }, { role: 'user', content: `TOOL RESULT ${step.tool}: ${JSON.stringify(stripEvidence(output)).slice(0, 12000)}` });
   }
   return 'I could not finish within the tool-step limit; please narrow the question.';
 }

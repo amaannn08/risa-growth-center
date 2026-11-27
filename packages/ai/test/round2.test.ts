@@ -54,20 +54,39 @@ describe('get_projection (historical event-end forecast)', () => {
 
 describe('ambiguity → clarifying question', () => {
   it('"Which one did better?" with no context asks which campaigns/metric/date and offers options', () => {
-    const q = clarifyingQuestion('Which one did better?', {}, 0);
+    const q = clarifyingQuestion('Which one did better?', {}, []);
     expect(q).toBe(CLARIFY_TEXT);
     expect(q).toMatch(/Which campaigns/); expect((q!.match(/^\d\./gm) ?? []).length).toBe(3);
     expect(groundingCheck(q!, []).checked).toBe(0); // no figures asserted
   });
   it('does not trigger when the question names campaigns, has campaign page context, a prior turn, or ranks all campaigns by a metric', () => {
-    expect(clarifyingQuestion('Which one did better, Paid Social or Creator Partners?', {}, 0)).toBeNull();
-    expect(clarifyingQuestion('Which one did better?', { campaignId: 'C02' }, 0)).toBeNull();
-    expect(clarifyingQuestion('Which one did better?', {}, 1)).toBeNull();
-    expect(clarifyingQuestion('Which campaign has the lowest cost per visitor?', {}, 0)).toBeNull();
-    expect(clarifyingQuestion('How did the campaign do?', {}, 0)).toBeNull();
+    expect(clarifyingQuestion('Which one spent less, Paid Social or Creator Partners?', {}, [])).toBeNull();
+    expect(clarifyingQuestion('Which campaign has the lowest cost per visitor?', {}, [])).toBeNull();
+    expect(clarifyingQuestion('How did the campaign do?', {}, [])).toBeNull();
+    expect(clarifyingQuestion('Did Paid Social do better than target?', {}, [])).toBeNull(); // not a comparison between campaigns
+    for (const q of ['What was our spend at event close vs data close, and why are they different?', 'Which target applied on 14 March vs 15 March and what moved?', 'What is our progress vs the visitor target at event close?', 'Which target applied at data close?'])
+      expect(clarifyingQuestion(q, {}, []), q).toBeNull(); // not campaign comparisons: must reach the tools
+  });
+  it('asks ONLY for unresolved inputs (Q9: pair known, measure unset; Q10: measure+date known, pair unknown) and never re-asks a resolved follow-up', () => {
+    const q9 = clarifyingQuestion('Organic Search or Community Groups for one slot, with no success metric chosen?', {}, [])!;
+    expect(q9).toMatch(/On what measure should I compare Organic Search and Community Groups/); expect(q9).not.toMatch(/Which campaigns/);
+    const q10 = clarifyingQuestion('Which of those two spent less by March 21, 2025?', {}, [])!;
+    expect(q10).toMatch(/Which campaigns do you mean/); expect(q10).toMatch(/measure.* already clear/); expect(q10).not.toMatch(/On what measure/);
+    // the same sentence after the pair was named is fully resolved → no question (tools run)
+    expect(clarifyingQuestion('Which of those two spent less by March 21, 2025?', {}, ['Compare Organic Search and Community Groups'])).toBeNull();
+    expect(clarifyingQuestion('Which one did better?', {}, ['Compare Organic Search and Community Groups on registrations', 'Here is the table…'])).toBeNull();
+    // a measure given in the previous user turn carries into "what about …" follow-ups; a judgement word alone does not supply one
+    expect(clarifyingQuestion('Which one did better?', {}, ['Organic Search vs Community Groups'])).toMatch(/On what measure/);
+    // nothing in the thread names a pair → ask for it
+    expect(clarifyingQuestion('Which of those two spent less?', {}, ['What was our spend at data close?'])).toMatch(/Which campaigns do you mean/);
+    // an assistant answer that introduced a pair resolves "those two"; an assistant's words never supply a measure
+    expect(clarifyingQuestion('Which of those two spent less?', {}, [{ role: 'assistant', text: 'College Partnerships and Creator Partners are the two biggest.' }])).toBeNull();
+    expect(clarifyingQuestion('Which one did better?', {}, [{ role: 'user', text: 'Organic Search vs Community Groups' }, { role: 'assistant', text: 'Registrations and visitors are shown below.' }])).toMatch(/On what measure/);
+    // a single campaign judgement needs only the measure when the campaign is on the page
+    expect(clarifyingQuestion('Was that campaign worth the money?', { campaignId: 'C02' }, [])).toMatch(/On what measure/);
   });
   it('the prompt tells the model to ask instead of assuming', async () => {
-    expect(systemPrompt(await makeEnv(db))).toMatch(/must NOT be answered by assuming a pair\/metric[\s\S]*ONE short clarifying question[\s\S]*call no tools/);
+    expect(systemPrompt(await makeEnv(db))).toMatch(/Ask ONLY for what is still unresolved, BEFORE any comparison tool runs[\s\S]*ONE short question[\s\S]*calls no tools/);
   });
 });
 

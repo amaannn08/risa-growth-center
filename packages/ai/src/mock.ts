@@ -11,6 +11,11 @@ export async function runMock(env: ToolEnv, lastUserText: string, log: ToolLogEn
     const d = await call('propose_task', { title: 'Mock: reconfirmation reminder for confirmed registrants', priority: 'p1', owner_id: 'Aman', due_date: '2026-01-20', evidence: [{ tool: 'get_funnel', metric: 'cancelled', value: f.people.status_by_person.cancelled }] });
     return `I drafted a task for you to review — nothing is created until you click **Confirm**. (${d.preview})`;
   }
+  if (/stale|unverified/.test(t)) {
+    // e2e: cites a calculator that never ran this turn (the review's Q3 shape) next to a valid funnel citation
+    const f = await call('get_funnel', {});
+    return `**${f.people.visitors_unique_verified.toLocaleString('en-US')}** verified visitors [get_funnel · ${f.as_of} · r${f.data_revision}]; recomputed rate [calculate · r${f.data_revision}].`;
+  }
   const f = await call('get_funnel', {});
   return `**${f.people.visitors_unique_verified.toLocaleString('en-US')}** unique verified visitors and **${f.people.registered.toLocaleString('en-US')}** registered [get_funnel · ${f.as_of} · r${f.data_revision}].`;
 }

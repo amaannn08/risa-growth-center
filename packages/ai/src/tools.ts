@@ -1,11 +1,12 @@
 import { z } from 'zod';
 import {
   KNOWN_MISSING, UNATTR, attendanceByDay, calc, dataQuality, diagnose, istDate, mode, recommendCampaigns, scoreBets, showUpByRegistrationWeek,
-  snapshot, targetsView, weeklySeries, whatIfShift, projectVisitors, strategyModel, lookup, addDays, diffDays, ratio,
+  snapshot, targetsView, weekdayMon0, whatIfShift, projectVisitors, strategyModel, lookup, addDays, diffDays, ratio,
   type Attribution, type GroupMetrics, type Snapshot,
 } from '@gc/core';
 import { createDraft } from '@gc/db';
 import { ToolError, liveStrategy, type ToolEnv } from './env';
+import { buildEvidence, callEvidence } from './evidence';
 
 // ---------- shared schemas ----------
 const AsOf = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD').optional().describe('As-of date YYYY-MM-DD (IST end of day). Defaults to the conversation context date.');
@@ -38,7 +39,7 @@ export function resolveCampaign(env: ToolEnv, v?: string | null): string | undef
 
 async function resolveOwner(env: ToolEnv, v?: string | null): Promise<string | undefined> {
   if (!v) return undefined;
-  const rows = await env.db.query<{ owner_id: string; name: string }>('SELECT owner_id, name FROM team_members');
+  const rows = env.mgmt.team;
   const l = v.trim().toLowerCase();
   const hit = rows.find((r) => r.owner_id.toLowerCase() === l) ?? rows.find((r) => r.name.toLowerCase() === l) ?? rows.find((r) => r.name.toLowerCase().split(' ').includes(l) || r.name.toLowerCase().includes(l));
   if (!hit) throw new ToolError('UNKNOWN_OWNER', `No team member matches "${v}"`, `Valid: ${rows.map((r) => `${r.owner_id}=${r.name}`).join(', ')}`);
@@ -182,9 +183,11 @@ export const TOOLS: ToolSpec[] = [
     schema: z.object({
       metric: z.enum(['registrations', 'identified', 'confirmed_net', 'visitors', 'clicks', 'spend', 'registrations_per_click']),
       campaign_id: CampaignId, granularity: z.enum(['day', 'week']).optional(), from: AsOf, through: AsOf,
+      include_partial_in_ranking: z.boolean().optional().describe('Default false: partial periods (fewer than 7 days, e.g. the running week at the as-of cutoff) are listed but not ranked in biggest_changes.'),
     }),
     run: (env, a) => {
-      const from = resolveAsOf(env, a.from ?? env.covStart), through = resolveAsOf(env, a.through ?? env.covEnd);
+      // default cutoff = the conversation's as-of date (never future data); an explicit `through` wins
+      const from = resolveAsOf(env, a.from ?? env.covStart), through = resolveAsOf(env, a.through ?? env.context.asOf ?? env.covEnd);
       const cid = resolveCampaign(env, a.campaign_id ?? env.context.campaignId);
       const gran = a.granularity ?? 'week';
       type Inc = { regs: number; ident: number; confnet: number; vis: number; clicks: number; spend: number };
@@ -194,38 +197,37 @@ export const TOOLS: ToolSpec[] = [
         clicks: cur.clicks - prev.clicks, spend: cur.marketing_spend_inr - prev.marketing_spend_inr,
       });
       const pick = (s: Snapshot) => (cid ? (s.campaigns![cid]!.first_touch as GroupMetrics) : s.overall);
-      const periods: { end: string; from: string; inc: Inc }[] = [];
+      const periods: { end: string; from: string; days: number; partial: boolean; inc: Inc }[] = [];
       if (gran === 'week') {
-        for (const w of weeklySeries(env.ds)) {
-          if (w.through < from || w.through > through) continue;
-          const sum: Inc = { regs: 0, ident: 0, confnet: 0, vis: 0, clicks: 0, spend: 0 };
-          for (const [k, row] of Object.entries(w.campaigns)) {
-            if (cid && k !== cid) continue;
-            const p = row.first_touch.period_increment;
-            sum.regs += p.registered_people; sum.ident += p.identified_external_people; sum.confnet += p.net_change_in_latest_confirmed_people;
-            sum.vis += p.attended_people; sum.clicks += p.clicks; sum.spend += p.marketing_spend_inr;
-          }
-          periods.push({ end: w.through, from: w.from, inc: sum });
+        // date-bounded Mon–Sun periods; both edges are clipped to [from, through] (same boundaries/increments as the Diagnose weekly series)
+        for (let start = from; start <= through;) {
+          const end = [addDays(start, 6 - weekdayMon0(start)), through].sort()[0]!;
+          const days = diffDays(end, start) + 1;
+          periods.push({ from: start, end, days, partial: days < 7, inc: incOf(pick(snapshot(env.ds, end)), pick(snapshot(env.ds, addDays(start, -1)))) });
+          start = addDays(end, 1);
         }
       } else {
         if (diffDays(through, from) > 31) throw new ToolError('RANGE_TOO_LARGE', 'Daily granularity is limited to 31 days', 'Use granularity=week or narrow from/through.');
         let prev = pick(snapshot(env.ds, addDays(from, -1) < env.covStart ? from : addDays(from, -1)));
         for (let d = from; d <= through; d = addDays(d, 1)) {
           const cur = pick(snapshot(env.ds, d));
-          periods.push({ end: d, from: d, inc: incOf(cur, prev) });
+          periods.push({ end: d, from: d, days: 1, partial: false, inc: incOf(cur, prev) });
           prev = cur;
         }
       }
       const val = (i: Inc) => ({ registrations: i.regs, identified: i.ident, confirmed_net: i.confnet, visitors: i.vis, clicks: i.clicks, spend: i.spend, registrations_per_click: ratio(i.regs, i.clicks) } as Record<string, number | null>)[a.metric] ?? null;
       const series = periods.map((p) => ({
-        period_start: p.from, period_end: p.end, value: val(p.inc),
+        period_start: p.from, period_end: p.end, days: p.days, partial: p.partial, value: val(p.inc),
         ...(a.metric === 'registrations_per_click' ? { pct: pct2(val(p.inc)), numerator: p.inc.regs, denominator: p.inc.clicks } : {}),
         ...(a.metric === 'registrations' ? { clicks_in_period: p.inc.clicks } : {}),
       }));
-      const changes: any[] = [];
-      for (let i = 1; i < periods.length; i++) {
-        const a0 = periods[i - 1]!, a1 = periods[i]!, v0 = val(a0.inc), v1 = val(a1.inc);
-        if (v0 === null || v1 === null) continue;
+      const fmtVal = (p: (typeof series)[number]) => (a.metric === 'registrations_per_click' ? (p as any).pct ?? 'n/a' : String(p.value));
+      // every period in order, as quotable text: lets the answer cite the values before, at AND after a break without dropping any
+      const series_text = series.map((p) => `${p.period_start}→${p.period_end}: ${fmtVal(p)}${a.metric === 'registrations' ? ` (${(p as any).clicks_in_period} clicks)` : ''}${p.partial ? ` [partial, ${p.days} d]` : ''}`);
+      const changes: any[] = [], rankable = a.include_partial_in_ranking ? periods : periods.filter((p) => !p.partial);
+      for (let i = 1; i < rankable.length; i++) {
+        const a0 = rankable[i - 1]!, a1 = rankable[i]!, v0 = val(a0.inc), v1 = val(a1.inc);
+        if (v0 === null || v1 === null || a0.end !== addDays(a1.from, -1)) continue; // only adjacent periods are compared
         const volOk = a.metric === 'registrations_per_click' ? a0.inc.clicks >= 300 && a1.inc.clicks >= 300 : Math.max(Math.abs(v0), Math.abs(v1)) >= (a.metric === 'spend' ? 1000 : 30);
         if (!volOk) continue;
         changes.push({ from_period_end: a0.end, to_period_end: a1.end, from: v0, to: v1, delta: v1 - v0, from_detail: a0.inc.clicks ? { regs: a0.inc.regs, clicks: a0.inc.clicks } : undefined, to_detail: { regs: a1.inc.regs, clicks: a1.inc.clicks } });
@@ -233,7 +235,8 @@ export const TOOLS: ToolSpec[] = [
       changes.sort((x, y) => Math.abs(y.delta) - Math.abs(x.delta));
       return {
         ...meta(env, 'get_trend', through, { value: a.metric === 'spend' ? 'INR' : 'people / fraction' }, 'first_touch'),
-        metric: a.metric, scope: cid ?? 'overall', granularity: gran, series, biggest_changes: changes.slice(0, 3),
+        metric: a.metric, scope: cid ?? 'overall', granularity: gran, cutoff: through, series, series_text, biggest_changes: changes.slice(0, 3),
+        ranking_note: a.include_partial_in_ranking ? 'Partial periods are included in the ranking (not like-for-like).' : 'Partial periods (days < 7, flagged partial=true) are shown in series but excluded from biggest_changes.',
         caveat: 'Cause not in data: landing page, cohort lag and posting schedule are hypotheses, not findings.',
       };
     },
@@ -382,7 +385,10 @@ export const TOOLS: ToolSpec[] = [
         campaign_id: c.campaign_id, name: c.campaign_name, channel: c.channel, owner: c.owner_name, status: c.status ?? 'active', plan_budget_inr: c.plan_budget_inr ?? null,
         notes: c.notes ?? null, net_spend_inr: snap.campaigns![c.campaign_id]?.first_touch.marketing_spend_inr, recommendation: recs[c.campaign_id]?.decision,
       })).filter((r) => !a.status || r.status === a.status);
-      return { ...meta(env, 'list_campaigns', asOf, { spend: 'INR' }), campaigns: rows, plan_budget_total_inr: rows.reduce((s, r) => s + Number(r.plan_budget_inr ?? 0), 0) };
+      const notActive = rows.filter((r) => r.status !== 'active').map((r) => ({ campaign_id: r.campaign_id, name: r.name, status: r.status }));
+      return { ...meta(env, 'list_campaigns', asOf, { spend: 'INR' }), campaigns: rows, active_campaign_ids: rows.filter((r) => r.status === 'active').map((r) => r.campaign_id),
+        not_active: notActive, status_note: notActive.length ? `NOT active (name them with their status when listing active campaigns): ${notActive.map((n) => `${n.name} is ${n.status}`).join('; ')}.` : 'All campaigns are active.',
+        plan_budget_total_inr: rows.reduce((s, r) => s + Number(r.plan_budget_inr ?? 0), 0) };
     },
   },
   {
@@ -394,13 +400,12 @@ export const TOOLS: ToolSpec[] = [
     }),
     run: async (env, a) => {
       const cid = resolveCampaign(env, a.campaign_id), owner = await resolveOwner(env, a.owner_id);
-      const where: string[] = [], params: unknown[] = [];
-      const st = a.status ?? 'open';
-      if (st === 'open') where.push(`t.status <> 'done'`); else if (st !== 'all') { params.push(st); where.push(`t.status = $${params.length}::task_status`); }
-      if (cid && cid !== UNATTR) { params.push(cid); where.push(`t.campaign_id = $${params.length}`); }
-      if (owner) { params.push(owner); where.push(`t.owner_id = $${params.length}`); }
-      const rows = await env.db.query(`SELECT t.id, t.title, t.status::text AS status, t.priority::text AS priority, t.due_date::text AS due_date, t.campaign_id, t.owner_id, m.name AS owner_name, t.bet_id, t.experiment_id, t.insight_id, t.created_via::text AS created_via
-        FROM tasks t LEFT JOIN team_members m ON m.owner_id=t.owner_id ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY t.due_date NULLS LAST, t.id LIMIT ${Math.min(a.limit ?? 30, 50)}`, params);
+      const st = a.status ?? 'open', names = new Map(env.mgmt.team.map((m) => [m.owner_id, m.name]));
+      const rows = env.mgmt.tasks
+        .filter((t: any) => (st === 'open' ? t.status !== 'done' : st === 'all' || t.status === st) && (!cid || cid === UNATTR || t.campaign_id === cid) && (!owner || t.owner_id === owner))
+        .sort((x: any, y: any) => (x.due_date === y.due_date ? x.id - y.id : x.due_date === null ? 1 : y.due_date === null ? -1 : x.due_date < y.due_date ? -1 : 1))
+        .slice(0, Math.min(a.limit ?? 30, 50))
+        .map((t: any) => ({ id: t.id, title: t.title, status: t.status, priority: t.priority, due_date: t.due_date, campaign_id: t.campaign_id, owner_id: t.owner_id, owner_name: t.owner_id ? names.get(t.owner_id) ?? null : null, bet_id: t.bet_id, experiment_id: t.experiment_id, insight_id: t.insight_id, created_via: t.created_via }));
       return { ...meta(env, 'list_tasks', a.overdue_as_of ?? null, { due_date: 'YYYY-MM-DD' }), count: rows.length, tasks: rows.map((r: any) => ({ ...r, overdue: a.overdue_as_of && r.due_date && r.status !== 'done' ? r.due_date < a.overdue_as_of : undefined })), note: 'Seeded task dates are for the next edition (2026 planning window).' };
     },
   },
@@ -409,11 +414,10 @@ export const TOOLS: ToolSpec[] = [
     description: 'Planned experiments with thresholds: primary KPI, scale / change / stop rules, guardrails, readout date, status, observed value and decision. Filter by status or bet (B1..B5).',
     schema: z.object({ status: z.string().optional(), bet_id: z.string().optional() }),
     run: async (env, a) => {
-      const where: string[] = [], params: unknown[] = [];
-      if (a.status) { params.push(a.status); where.push(`e.status::text = $${params.length}`); }
-      if (a.bet_id) { params.push(a.bet_id.toUpperCase()); where.push(`e.bet_id = $${params.length}`); }
-      const rows = await env.db.query(`SELECT e.id, e.bet_id, b.name AS bet_name, e.name, e.hypothesis, e.primary_kpi, e.kpi_unit, e.assignment_unit, e.min_sample, e.scale_op, e.scale_value::float8 AS scale_value, e.stop_op, e.stop_value::float8 AS stop_value, e.change_rule, e.stop_note, e.guardrails, e.readout_date::text AS readout_date, e.status::text AS status, e.observed_value::float8 AS observed_value, e.observed_n, e.decision
-        FROM experiments e LEFT JOIN bets b ON b.id=e.bet_id ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY e.id`, params);
+      const betName = new Map(env.mgmt.bets.map((b: any) => [b.id, b.name]));
+      const rows = env.mgmt.experiments
+        .filter((e: any) => (!a.status || e.status === a.status) && (!a.bet_id || e.bet_id === a.bet_id.toUpperCase()))
+        .map(({ observation: _o, ...e }: any) => ({ ...e, bet_name: betName.get(e.bet_id) ?? null }));
       return { ...meta(env, 'list_experiments', null, { thresholds: 'unit per kpi_unit' }), experiments: rows, note: 'Thresholds are planning rules for the next edition; none has run yet unless status says so.' };
     },
   },
@@ -429,6 +433,8 @@ export const TOOLS: ToolSpec[] = [
         label: p.label, mode: p.mode, rate_windows_days: [7, 14, 28], days_left: p.days_left, current_registered: p.current_registered,
         visitors: p.visitors, registrations: p.registrations, campaigns: p.campaigns, assumptions: p.assumptions,
         active_campaigns: p.campaigns.filter((c) => c.status !== 'paused' && c.status !== 'stopped').map((c) => c.campaign_id),
+        paused_or_stopped_campaigns: p.campaigns.filter((c) => c.status === 'paused' || c.status === 'stopped').map((c) => ({ campaign_id: c.campaign_id, status: c.status })),
+        observed_actuals: { actuals_changed_by_management_status: false, statement: 'Observed actuals are unchanged by a campaign status change; only the forecast band moves (paused/stopped campaigns add nothing to it).' },
         note: p.mode === 'actual' ? 'The event has ended: projection equals the observed actual.' : 'Forecast for the dataset\'s historical event (2025), an ASSUMPTION-based band; not evidence and not the 2026 plan.',
       };
     },
@@ -447,7 +453,7 @@ export const TOOLS: ToolSpec[] = [
         acquisition_visitors: r.acquisition_visitors, reminder_visitors: r.reminder_visitors, walk_ins: r.walkins,
         spend_inr: r.spend, bets_spend_inr: r.bets_spend, reserve_inr: r.reserve, cap_inr: r.cap, cpa: r.cpa, reach: r.reach, capacity: r.capacity,
       });
-      const bets = await env.db.query<any>('SELECT id, name, impact::float8 AS impact, confidence::float8 AS confidence, ease::float8 AS ease FROM bets');
+      const bets = env.mgmt.bets;
       const scores = scoreBets(bets.map((b) => ({ id: b.id, impact: b.impact, confidence: b.confidence, ease: b.ease })));
       return {
         ...meta(env, 'get_strategy_model', null, { spend: 'INR', visitors: 'unique verified visitors' }),
@@ -541,10 +547,12 @@ export const TOOLS: ToolSpec[] = [
         title: a.title, description: a.description ?? null, campaign_id: cid && cid !== UNATTR ? cid : null, owner_id: owner ?? null, due_date: a.due_date ?? null, priority: a.priority,
         experiment_id: a.experiment_id ?? null, bet_id: a.bet_id ?? null, insight_id: a.insight_id ?? null, status: 'todo',
       };
+      // evidence is resolved against THIS turn's tool runs: each chip carries the run's own date/revision (never the page date); unresolvable items are flagged unverified
+      const evidence = buildEvidence(a.evidence, env.calls);
       let d;
-      try { d = await createDraft(env.db, { kind: 'task', payload, evidence: { items: a.evidence, as_of: env.context.asOf ?? env.covEnd, data_revision: env.meta.data_revision }, conversation_id: env.conversationId }); }
+      try { d = await createDraft(env.db, { kind: 'task', payload, evidence, conversation_id: env.conversationId }); }
       catch (e: any) { throw new ToolError('INVALID_DRAFT', e.message ?? String(e), 'Check dates (YYYY-MM-DD) and ids.'); }
-      return { ...meta(env, 'propose_task', null, {}), draft_id: d.draft_id, draft_kind: 'task', status: 'pending', payload, evidence: a.evidence, preview: `Task: ${a.title}${owner ? ` · owner ${owner}` : ''}${a.due_date ? ` · due ${a.due_date}` : ''} · ${a.priority}`, note: 'DRAFT ONLY — nothing is created until the user clicks Confirm.' };
+      return { ...meta(env, 'propose_task', null, {}), draft_id: d.draft_id, draft_kind: 'task', status: 'pending', payload, evidence: evidence?.items ?? [], evidence_unverified: (evidence?.items ?? []).filter((i) => i.verified === false).length, preview: `Task: ${a.title}${owner ? ` · owner ${owner}` : ''}${a.due_date ? ` · due ${a.due_date}` : ''} · ${a.priority}`, note: 'DRAFT ONLY — nothing is created until the user clicks Confirm.' };
     },
   },
   {
@@ -560,8 +568,9 @@ export const TOOLS: ToolSpec[] = [
       if (!cid || cid === UNATTR) throw new ToolError('INVALID_CAMPAIGN', 'A real campaign id is required');
       if (a.status === undefined && a.plan_budget_inr === undefined) throw new ToolError('MISSING_ARGS', 'Provide status and/or plan_budget_inr');
       const payload: Record<string, unknown> = { campaign_id: cid, reason: a.reason, ...(a.status ? { status: a.status } : {}), ...(a.plan_budget_inr !== undefined ? { plan_budget_inr: a.plan_budget_inr } : {}) };
-      const d = await createDraft(env.db, { kind: 'campaign_update', payload, evidence: { items: a.evidence, data_revision: env.meta.data_revision }, conversation_id: env.conversationId });
-      return { ...meta(env, 'propose_campaign_change', null, {}), draft_id: d.draft_id, draft_kind: 'campaign_update', status: 'pending', payload, evidence: a.evidence, preview: `Campaign ${cid}${a.status ? ` → ${a.status}` : ''}${a.plan_budget_inr !== undefined ? ` · plan budget ₹${a.plan_budget_inr}` : ''}`, note: 'DRAFT ONLY — nothing changes until the user clicks Confirm.' };
+      const evidence = buildEvidence(a.evidence, env.calls);
+      const d = await createDraft(env.db, { kind: 'campaign_update', payload, evidence, conversation_id: env.conversationId });
+      return { ...meta(env, 'propose_campaign_change', null, {}), draft_id: d.draft_id, draft_kind: 'campaign_update', status: 'pending', payload, evidence: evidence?.items ?? [], preview: `Campaign ${cid}${a.status ? ` → ${a.status}` : ''}${a.plan_budget_inr !== undefined ? ` · plan budget ₹${a.plan_budget_inr}` : ''}`, note: 'DRAFT ONLY — nothing changes until the user clicks Confirm.' };
     },
   },
 ];
@@ -570,7 +579,15 @@ export const TOOL_NAMES = TOOLS.map((t) => t.name);
 export const toolByName = (n: string) => TOOLS.find((t) => t.name === n);
 
 /** Run a tool by name with zod validation; errors become typed `{error:{code,message,hint}}` results (never thrown). */
-export async function runTool(env: ToolEnv, name: string, rawArgs: unknown): Promise<any> {
+export async function runTool(env: ToolEnv, name: string, rawArgs: unknown, toolCallId?: string): Promise<any> {
+  const out = await runToolRaw(env, name, rawArgs);
+  // server-issued evidence refs for this call (trusted call history); the model never sees them (see stripEvidence)
+  const ce = callEvidence(toolCallId ?? `tc_${env.calls.length + 1}_${name}`, name, out);
+  env.calls.push(ce);
+  return out && typeof out === 'object' ? { ...out, _evidence: ce } : out;
+}
+
+async function runToolRaw(env: ToolEnv, name: string, rawArgs: unknown): Promise<any> {
   const spec = toolByName(name);
   if (!spec) return { tool: name, data_revision: env.meta.data_revision, error: { code: 'UNKNOWN_TOOL', message: `No tool named ${name}`, hint: `Tools: ${TOOL_NAMES.join(', ')}` } };
   const parsed = spec.schema.safeParse(rawArgs ?? {});

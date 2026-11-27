@@ -78,6 +78,47 @@ test('B5 reserve gate and B4 final holdout are shown as distinct decisions', asy
   await expect(page.getByTestId('gate-decision')).toContainText('Release reserve');
 });
 
+test('every experiment form exposes its typed guardrail inputs; B5 confirmation below the 75% hard floor is Stop and holds the reserve', async ({ page }) => {
+  for (const [id, key] of [[1, 'confirmed_pct'], [2, 'duplicate_pct'], [3, 'abuse_pct'], [4, 'delivery_pct'], [5, 'confirmation_pct']] as const) {
+    await page.goto('/execution');
+    await page.getByTestId(`readout-${id}`).click();
+    await expect(page.getByLabel(`guardrail ${key}`)).toBeVisible();
+    await expect(page.getByTestId('readout-unparsed')).toHaveCount(0);
+  }
+});
+
+test('B5 hard floor: confirmation 70% → Stop and the reserve is held (server-adjudicated); 80% → Change; 90% → Scale', async ({ request }) => {
+  const post = async (conf: number) => (await (await request.post('/api/mutations/experiment', { data: { action: 'readout', id: 5, observed_value: 12, observed_n: 500, guardrail_observations: { confirmation_pct: conf, marginal_visitor_cost_inr: 150 }, gate_inputs: { forecast_extra_visitors: 45, forecast_visitor_cost_inr: 140 } } })).json()).row;
+  const stop = await post(70);
+  expect(stop.decision).toBe('stop'); expect(stop.observation.gates[0].decision).toBe('hold');
+  expect((await post(80)).decision).toBe('change');
+  const ok = await post(90);
+  expect(ok.decision).toBe('scale'); expect(ok.observation.gates[0].decision).toBe('release');
+});
+
+test('readout form + server reject a KPI that conflicts with its counts (B3: 90% vs 1/250)', async ({ page, request }) => {
+  await page.goto('/execution');
+  await page.getByTestId('readout-3').click();
+  await page.getByLabel('observed value').fill('90');
+  await page.getByLabel('kpi numerator').fill('1');
+  await page.getByLabel('kpi denominator').fill('250');
+  await page.getByLabel('observed n').fill('250');
+  await expect(page.getByTestId('readout-invalid')).toContainText('conflicts with its counts');
+  await expect(page.getByTestId('readout-save')).toBeDisabled();
+  const r = await request.post('/api/mutations/experiment', { data: { action: 'readout', id: 3, observed_value: 90, kpi_numerator: 1, kpi_denominator: 250, observed_n: 250, guardrail_observations: { abuse_pct: 1, visitor_cost_inr: 100 } } });
+  expect(r.status()).toBe(400);
+});
+
+test('a citation with no matching tool call this turn is removed server-side (non-streamed modes); the valid citation stays rendered as verified', async ({ page }) => {
+  await page.goto('/copilot');
+  await page.getByLabel('Ask the Copilot').fill('show a stale citation');
+  await page.getByRole('button', { name: 'Send' }).click();
+  const msg = page.getByTestId('assistant-msg').last();
+  await expect(msg).toContainText('[unverified citation removed]');
+  await expect(msg).not.toContainText('[calculate');
+  await expect(msg.getByTestId('citation')).toContainText('get_funnel');
+});
+
 test('shared-demo banner is visible', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByTestId('shared-demo-banner')).toContainText('Shared demo');

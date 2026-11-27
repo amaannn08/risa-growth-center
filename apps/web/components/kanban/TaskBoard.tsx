@@ -5,7 +5,7 @@ import { mutate } from '@/lib/mutate';
 import { FormButton, type FormSpec } from '@/components/forms/GenericForm';
 import { DeleteButton } from '@/components/DeleteButton';
 import { colorOf } from '@/lib/ui';
-import { evidenceLabel, normalizeEvidence } from '@gc/core';
+import { evidenceLabel, itemProvenance, normalizeEvidence } from '@gc/core';
 
 export interface TaskRow { id: number; title: string; description: string | null; campaign_id: string | null; owner_id: string | null; due_date: string | null; status: string; priority: string; experiment_id: number | null; bet_id: string | null; insight_id: string | null; evidence: unknown; created_via: string }
 interface Opt { value: string; label: string }
@@ -68,7 +68,7 @@ export function TaskBoard({ tasks, campaigns, owners, bets, experiments, today }
                       if (!t.insight_id && !ev) return null;
                       const via = t.created_via === 'copilot' ? ' · via Copilot' : '';
                       return (
-                        <details className="mt-1 text-[11px]"><summary className="cursor-pointer rounded bg-sky-50 px-1 text-sky-800" data-testid="evidence-chip">evidence · {t.insight_id ? t.insight_id.split(':')[0] : ev!.items.map((e) => `${e.metric}: ${e.value}`).join('; ')}{via}</summary>
+                        <details className="mt-1 text-[11px]"><summary className="cursor-pointer rounded bg-sky-50 px-1 text-sky-800" data-testid="evidence-chip">evidence · {t.insight_id ? t.insight_id.split(':')[0] : ev!.items.map((e) => `${e.metric}: ${e.value}${itemProvenance(e, ev!)}`).join('; ')}{via}</summary>
                           <div className="mt-1 text-slate-600" data-testid="evidence-detail">{t.insight_id}{ev && <div>{evidenceLabel(ev)}</div>}</div></details>
                       );
                     })()}

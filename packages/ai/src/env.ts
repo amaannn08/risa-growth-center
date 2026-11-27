@@ -1,7 +1,8 @@
 import {
   coverageEnd, coverageStart, historyFromDataset, strategyModel, type Assumption, type Attribution, type DecisionRule, type Dataset,
 } from '@gc/core';
-import { getDb, loadDataset, type Db, type Meta } from '@gc/db';
+import { getDb, readConsistent, type Db, type Management, type Meta } from '@gc/db';
+import type { CallEvidence } from './evidence';
 
 export interface ChatContext { page?: string; asOf?: string; attribution?: Attribution; campaignId?: string; resolvedDrafts?: { id: string; result_ref?: string; status: string }[] }
 
@@ -9,6 +10,8 @@ export interface ChatContext { page?: string; asOf?: string; attribution?: Attri
 export interface ToolEnv {
   db: Db; ds: Dataset; meta: Meta; assumptions: Assumption[]; rules: DecisionRule[];
   context: ChatContext; conversationId?: string; covStart: string; covEnd: string;
+  /** management rows read in the SAME snapshot as `ds`/`meta` (tasks, experiments, bets, team) */ mgmt: Management;
+  /** server-issued evidence for every tool call executed this turn (trusted call history) */ calls: CallEvidence[];
 }
 
 export class ToolError extends Error {
@@ -24,8 +27,9 @@ export async function loadAssumptions(db: Db) {
 
 export async function makeEnv(db?: Db, context: ChatContext = {}, conversationId?: string): Promise<ToolEnv> {
   const d = db ?? (await getDb());
-  const [{ ds, meta }, [assumptions, rules]] = await Promise.all([loadDataset(d), loadAssumptions(d)]);
-  return { db: d, ds, meta, assumptions, rules, context, conversationId, covStart: coverageStart(ds), covEnd: coverageEnd(ds) };
+  // revision + dataset + assumptions/rules + management rows under ONE transaction snapshot
+  const { ds, meta, mgmt } = await readConsistent(d);
+  return { db: d, ds, meta, assumptions: mgmt.assumptions as Assumption[], rules: mgmt.rules as DecisionRule[], mgmt, calls: [], context, conversationId, covStart: coverageStart(ds), covEnd: coverageEnd(ds) };
 }
 
 export function liveStrategy(env: Pick<ToolEnv, 'ds' | 'assumptions'>, assumptions = env.assumptions) {

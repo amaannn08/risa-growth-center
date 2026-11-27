@@ -16,7 +16,7 @@ const MONTHS = '(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*';
 /** Strip things that look numeric but are not figures: citations, dates, ids, T−14 style offsets, list ordinals, years. */
 export function stripNonFigures(text: string): string {
   return text
-    .replace(/\[[^\]]*·[^\]]*\]/g, ' ')                 // [tool · as_of · rev]
+    .replace(/\[(?:calculate|[a-z]+_[a-z_]+)(?:\s*·[^\]]*)?\]/g, ' ') // [tool · as_of · rev], [calculate · r69], [tool]
     .replace(/\(?\brev(?:ision)?\s*r?\d+\)?/gi, ' ')    // rev 12 / r7
     .replace(/\b\d{4}-\d{2}-\d{2}\b/g, ' ')              // ISO dates
     .replace(/\b\d{1,2}:\d{2}(?::\d{2})?\b/g, ' ')       // times
@@ -94,17 +94,31 @@ function isSimpleDerivation(x: number, dp: number, shown: number[], pct = false)
   return false;
 }
 
-export const CITATION_RE = /\[\s*([a-z_]+)\s*·\s*([^·\]]*?)\s*·\s*r?(\d+)\s*\]/gi;
+/** A citation names a tool; the date and revision are optional so abbreviated forms (`[calculate · r69]`, `[get_funnel]`) are validated too. */
+export interface Citation { raw: string; tool: string; asOf: string | null; revision: number | null }
+const TOOL_TOKEN = /^(?:calculate|[a-z]+_[a-z_]+)$/;
+export function parseCitations(answer: string): Citation[] {
+  const out: Citation[] = [];
+  for (const m of answer.matchAll(/\[([^\[\]\n]{2,120})\](?!\()/g)) {
+    const parts = m[1]!.split('·').map((x) => x.trim());
+    const tool = parts[0]!.toLowerCase();
+    if (!TOOL_TOKEN.test(tool)) continue;
+    let asOf: string | null = null, revision: number | null = null;
+    for (const t of parts.slice(1)) {
+      if (/^\d{4}-\d{2}-\d{2}$/.test(t)) asOf = t;
+      else { const r = /^(?:r|rev(?:ision)?\s*)(\d+)$/i.exec(t) ?? /^(\d+)$/.exec(t); if (r) revision = Number(r[1]); }
+    }
+    out.push({ raw: m[0], tool, asOf, revision });
+  }
+  return out;
+}
 
-/** Citations in `answer` that do not correspond to a tool actually executed in this turn (same tool, revision and, when both are dates, as_of). */
+/** Citations in `answer` that do not resolve to a tool call executed in this turn (same tool and, when written, same revision and as_of date). */
 export function badCitations(answer: string, executed: ExecutedTool[]): string[] {
   const bad: string[] = [];
-  for (const m of answer.matchAll(CITATION_RE)) {
-    const [raw, tool, asOf, rev] = [m[0], m[1]!.toLowerCase(), m[2]!.trim(), Number(m[3])];
-    const runs = executed.filter((e) => e.name === tool);
-    const dateLike = /^\d{4}-\d{2}-\d{2}$/.test(asOf);
-    const ok = runs.some((e) => (e.data_revision == null || e.data_revision === rev) && (!dateLike || e.as_of == null || e.as_of === asOf));
-    if (!ok) bad.push(raw);
+  for (const c of parseCitations(answer)) {
+    const ok = executed.filter((e) => e.name === c.tool).some((e) => (c.revision === null || e.data_revision == null || e.data_revision === c.revision) && (c.asOf === null || e.as_of == null || e.as_of === c.asOf));
+    if (!ok) bad.push(c.raw);
   }
   return [...new Set(bad)];
 }
@@ -112,7 +126,7 @@ export function badCitations(answer: string, executed: ExecutedTool[]): string[]
 /** Replace unverifiable citations (server-side, for non-streamed modes) with an explicit marker. */
 export function stripBadCitations(answer: string, executed: ExecutedTool[]): string {
   const bad = new Set(badCitations(answer, executed));
-  return bad.size ? answer.replace(CITATION_RE, (raw) => (bad.has(raw) ? '[unverified citation removed]' : raw)) : answer;
+  return bad.size ? answer.replace(/\[[^\[\]\n]{2,120}\](?!\()/g, (raw) => (bad.has(raw) ? '[unverified citation removed]' : raw)) : answer;
 }
 
 export const executedFrom = (outputsByCall: { name: string; output?: any }[]): ExecutedTool[] =>
@@ -146,3 +160,13 @@ export const groundingLabel = (g: GroundingResult) => {
   const extra = [g.derived.length ? `${g.derived.length} derived by arithmetic on traced figures` : '', g.user_inputs.length ? `${g.user_inputs.length} are your scenario inputs, not evidence` : ''].filter(Boolean);
   return `✓ All ${g.checked} figures traced to tool results${extra.length ? ` (${extra.join('; ')})` : ''}`;
 };
+
+/** Per-call evidence as issued by the server (see evidence.ts); structurally typed so the client bundle does not import server code. */
+export interface TurnCall { tool: string; asOf: string | null; revision: number | null; refs: { signedValue: number }[] }
+/**
+ * Verify an answer ONLY against the tool calls the server executed in this turn: figures must equal a server-issued ref value, and every
+ * citation must resolve to one of those calls. Earlier turns and anything else in the client transcript count for nothing.
+ */
+export function groundingFromCalls(answer: string, calls: TurnCall[], userText: string[] = []): GroundingResult {
+  return groundingCheck(answer, [calls.flatMap((c) => c.refs.map((r) => r.signedValue))], userText, calls.map((c) => ({ name: c.tool, as_of: c.asOf, data_revision: c.revision })));
+}

@@ -65,7 +65,7 @@ export async function createDb(url?: string): Promise<Db> {
 const g = globalThis as any;
 /** Process-wide singleton (survives Next dev HMR). */
 export function getDb(): Promise<Db> {
-  if (!g.__gcDb) g.__gcDb = createDb();
+  if (!g.__gcDb) g.__gcDb = createDb(process.env.DATABASE_URL || 'pglite:.pglite');
   return g.__gcDb;
 }
 
@@ -88,3 +88,14 @@ export async function migrate(db: Db) {
     });
   }
 }
+
+/**
+ * Run `fn` against ONE consistent read snapshot (REPEATABLE READ, read-only on Postgres; PGlite serialises transactions so it is inherently isolated).
+ * Revision, dataset and every evidence-bearing row read through `q` therefore belong to the same committed state: a concurrent write can
+ * never make a page or tool answer mix revision N metadata with revision N+1 data.
+ */
+export const withSnapshot = <R>(db: Db, fn: (q: Q) => Promise<R>): Promise<R> =>
+  db.tx(async (q) => {
+    if (db.kind === 'postgres') await q.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');
+    return fn(q);
+  });

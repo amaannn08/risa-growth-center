@@ -44,6 +44,7 @@ export function slideContent(m: StrategyModel, i: SlideInputs = {}) {
       believe: [
         `Built bottom-up from the 2025 cohort (D): ${fmtInt(v25)} visitors, ${(showUp25 * 100).toFixed(2)}% registered show-up, ${fmtInr(Math.round(spend25 / v25))}/visitor.`,
         `Reference keeps proven channels (${fmtInr(refTotals.spend)} → ${fmtInt(refTotals.visitors)} registered visitors); five bets add ${fmtInt(b.acquisition_visitors)}–${fmtInt(s.acquisition_visitors)} + reminders ${fmtInt(b.reminder_visitors)}–${fmtInt(s.reminder_visitors)}.`,
+        `ASSUMPTION (reminders): treated ≤ ⌊⌊confirmed × ${Math.round(s.reminder.optin_rate * 100)}% opt-in⌋ × (1 − ${Math.round(s.reminder.holdout_share * 100)}% holdout)⌋ = ${fmtInt(s.reminder.treated)} (of ${fmtInt(s.reminder.eligible_optin)} eligible). Stretch runs two waves (pre-event ${s.reminder.wave1_pp} pp + day-of ${s.reminder.wave2_pp} pp = ${Math.round(s.reminder.lift_pp * 10) / 10} pp per person): the day-of wave raises visits per person, not the treated count; the ~12%-of-wave-1 size is an unvalidated guess the holdout will measure.`,
         'Turnout benchmarks 64.7% (Vihaya) and ~72% free events (PheedLoop).',
         `Capacity ≤${fmtInt(b.capacity.cap_per_day)}/day · ≤${fmtInt(b.capacity.cap_weekend)} weekend · 4 QR lanes = ${fmtInt(b.capacity.scans_per_hour)} scans/h.`,
         `Downside ${fmtInt(m.sensitivity.base.no_reminders_no_walkins)} (no reminder lift, no walk-ins); −5 pp show-up = ${fmtInt(m.sensitivity.base.showup_drop_visitors)}.`,
@@ -72,7 +73,7 @@ export function slideContent(m: StrategyModel, i: SlideInputs = {}) {
       ladder: ['Clicks → reg/click', 'Confirmed/registered at T−14', 'Reconfirmation at T−2', 'Verified show-up'],
       loop: [
         'Diagnose flags Paid Social: 50% registered show-up, 240 confirmed no-shows',
-        'Copilot what-if: ₹10k Paid Social → College Partnerships ≈ +88 visitors (scenario, not evidence)',
+        'Copilot what-if: ₹10k Paid Social → College Partnerships ≈ +88 visitors at 2025 average CPAs (scenario, not evidence)',
         'Draft task → user confirms → Execution board',
         'Data edit → numbers update (revision counter)',
         'Copilot says when data cannot answer (incrementality, unique reach)',

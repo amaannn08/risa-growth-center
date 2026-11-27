@@ -10,11 +10,18 @@ export async function overDailyCap(db: Db) {
   return !(await hit(db, 'chat:daily', DAILY_CAP, 86_400)).allowed;
 }
 
+/** Server-issued evidence per tool call, stored compactly: shared header + [metricField, signedValue, unit] tuples (lossless for {toolCallId, tool, metricField, unit, signedValue, attribution, asOf, revision}). */
+export function compactEvidence(ce: any) {
+  if (!ce || !Array.isArray(ce.refs)) return null;
+  const first = ce.refs[0];
+  return { toolCallId: ce.toolCallId, tool: ce.tool, asOf: ce.asOf, revision: ce.revision, attribution: first?.attribution ?? null, refs: ce.refs.slice(0, 200).map((r: any) => [r.metricField, r.signedValue, r.unit]), truncated: ce.refs.length > 200 };
+}
+
 export async function logChat(db: Db, row: { conversation_id?: string; ip_hash: string; question: string; tool_calls: ToolLogEntry[]; answer: string; grounding: unknown; model: string; latency_ms: number; error?: string }) {
   try {
     await db.query(
       `INSERT INTO chat_logs(conversation_id, ip_hash, question, tool_calls, answer, grounding, model, latency_ms, error) VALUES ($1,$2,$3,$4::text::jsonb,$5,$6::text::jsonb,$7,$8,$9)`,
-      [row.conversation_id ?? null, row.ip_hash, row.question.slice(0, 2000), JSON.stringify(row.tool_calls.map((t) => ({ name: t.name, args: t.args, ms: t.ms, error: t.output?.error?.code ?? null }))), row.answer.slice(0, 8000), JSON.stringify(row.grounding), row.model, row.latency_ms, row.error ?? null],
+      [row.conversation_id ?? null, row.ip_hash, row.question.slice(0, 2000), JSON.stringify(row.tool_calls.map((t) => ({ name: t.name, args: t.args, ms: t.ms, error: t.output?.error?.code ?? null, evidence: compactEvidence(t.output?._evidence) }))), row.answer.slice(0, 8000), JSON.stringify(row.grounding), row.model, row.latency_ms, row.error ?? null],
     );
   } catch (e) { console.error('chat_logs insert failed', (e as Error).message); }
 }

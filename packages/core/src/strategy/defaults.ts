@@ -57,8 +57,11 @@ export const DEFAULT_ASSUMPTIONS: Assumption[] = [
   ...both('bets', 'b5_show', 0.5, 0.56, 'ratio', 'B5 turnout', 'assumption'),
   ...both('bets', 'b5_budget', 6000, 12000, 'INR', 'B5 budget (2nd ₹6k tranche from reserve, gated)', 'assumption'),
   // B4 WhatsApp
-  ...both('reminders', 'b4_treated', 1750, 2500, 'people', 'B4 treated confirmed registrants', 'assumption'),
+  ...both('reminders', 'b4_treated', 1750, 2229, 'people', 'B4 target treated (capped at ⌊⌊confirmed × opt-in⌋ × (1 − holdout)⌋)', 'assumption'),
+  ...both('reminders', 'b4_optin', 0.9, 0.9, 'ratio', 'B4 share of confirmed registrants who opted in to WhatsApp', 'assumption'),
+  ...both('reminders', 'b4_holdout', 0.2, 0.2, 'ratio', 'B4 holdout share of opted-in confirmed registrants (stratified ~20%)', 'assumption'),
   ...both('reminders', 'b4_lift_pp', 4.0, 5.8, 'pp', 'B4 show-up lift (healthcare SMS benchmark)', 'sourced', 'sources.md'),
+  ...both('reminders', 'b4_wave2_pp', 0, 0.7, 'pp', 'ASSUMPTION: incremental show-up lift from a 2nd, day-of reminder wave (base: pre-event wave only). ~12% of the wave-1 lift, i.e. strongly diminishing returns on the same people; unvalidated, to be measured by the B4 holdout', 'assumption'),
   ...both('reminders', 'b4_budget', 12000, 12000, 'INR', 'B4 budget', 'assumption'),
   ...both('bets', 'added_confirm_rate', 0.9, 0.92, 'ratio', 'Share of added registrations that confirm', 'assumption'),
   // walk-ins

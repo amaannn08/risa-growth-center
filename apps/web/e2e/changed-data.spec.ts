@@ -134,7 +134,7 @@ test('(h) experiment readout → decision → follow-up task; campaign pause via
   await expect(page.getByTestId('readout-decision')).toContainText('Scale');
   await page.getByTestId('readout-save').click();
   await page.getByTestId('readout-followup').click();
-  await expect(page.getByText(/Saved · rev/).first()).toBeVisible();
+  await expect(page.getByTestId('kanban')).toContainText('Follow up: B3'); // wait for the follow-up write before reloading (the first "Saved" toast belongs to the readout)
   await page.reload();
   await expect(page.getByTestId('exp-board').getByTestId('exp-3')).toContainText('Scale');
   await expect(page.getByTestId('kanban')).toContainText('Follow up: B3');

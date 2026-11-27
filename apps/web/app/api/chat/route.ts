@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { convertToModelMessages, createUIMessageStreamResponse, toUIMessageStream, type UIMessage } from 'ai';
 import { getDb } from '@gc/db';
-import { clarifyingQuestion, executedFrom, groundingCheck, makeEnv, modelName, runJsonLoop, runMock, runNative, stripBadCitations, type ToolLogEntry } from '@gc/ai';
+import { clarifyingQuestion, executedFrom, groundingFromCalls, makeEnv, modelName, runJsonLoop, runMock, runNative, stripBadCitations, stripEvidence, type ToolLogEntry } from '@gc/ai';
 import { allow, clientId } from '@/lib/rateLimit';
 import { logChat, overDailyCap, replayStream } from '@/lib/copilot.server';
 
@@ -47,12 +47,12 @@ export async function POST(req: Request) {
   try {
     const env = await makeEnv(db, body.context, conv); // one dataset revision pinned for the whole answer
     const finish = async (answer: string, error?: string) => {
-      const priorOutputs = msgs.flatMap((m) => (m.parts ?? []).filter((p: any) => typeof p.type === 'string' && p.type.startsWith('tool-') && p.output).map((p: any) => p.output));
-      // citations are validated against the tools executed in THIS turn only; user-typed numbers are scenario inputs, not evidence
-      const g = groundingCheck(answer, [...priorOutputs, ...log.map((l) => l.output)], msgs.filter((m) => m.role === 'user').map(textOf), executedFrom(log));
+      // verified ONLY against the server's own call history for this turn (env.calls); nothing from the client transcript counts as evidence.
+      // user-typed numbers are scenario inputs, not evidence
+      const g = groundingFromCalls(answer, env.calls, msgs.filter((m) => m.role === 'user').map(textOf));
       await logChat(db, { conversation_id: conv, ip_hash: hash, question, tool_calls: log, answer, grounding: g, model: mode === 'mock' ? 'mock' : modelName(), latency_ms: Date.now() - t0, error });
     };
-    const clarify = clarifyingQuestion(question, body.context, msgs.filter((m) => m.role === 'assistant').length);
+    const clarify = clarifyingQuestion(question, body.context, msgs.slice(0, msgs.map((m) => m.role).lastIndexOf('user')).map((m) => ({ role: m.role as 'user' | 'assistant', text: textOf(m) })));
     if (clarify) { await finish(clarify); return createUIMessageStreamResponse({ stream: replayStream(clarify, []) }); }
     if (mode === 'mock') {
       const text = stripBadCitations(await runMock(env, question, log), executedFrom(log));
@@ -65,7 +65,7 @@ export async function POST(req: Request) {
       await finish(text);
       return createUIMessageStreamResponse({ stream: replayStream(text, log) });
     }
-    const modelMessages = await convertToModelMessages(msgs);
+    const modelMessages = await convertToModelMessages(msgs.map((m) => ({ ...m, parts: (m.parts ?? []).map((p: any) => (p.output ? { ...p, output: stripEvidence(p.output) } : p)) })) as UIMessage[]);
     const result = runNative(env, modelMessages, log, async (e: any) => { await finish(String(e?.text ?? '')); });
     return createUIMessageStreamResponse({ stream: toUIMessageStream({ stream: result.stream }), });
   } catch (e: any) {

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { adjudicateExperiment, normalizeEvidence } from '@gc/core';
+import { adjudicateExperiment, normalizeEvidence, validateObservation } from '@gc/core';
 import type { Db, Q } from './client';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { nextUserN } from './ids';
@@ -360,8 +360,9 @@ async function readoutTx(q: Q, id: number, input: unknown): Promise<Change> {
   const before = await getOne(q, 'experiments', 'id', id);
   if (!before) bad('NOT_FOUND', `Experiment ${id} not found`);
   const e = before as any;
-  let observed = v.observed_value ?? null;
-  if (observed === null && v.kpi_numerator != null && v.kpi_denominator != null && v.kpi_denominator > 0) observed = (e.kpi_unit === '%' ? 100 : 1) * v.kpi_numerator / v.kpi_denominator;
+  const check = validateObservation(e, v);
+  if (check.errors.length) bad('VALIDATION', check.errors.join(' '));
+  const observed = check.value;
   const ev = adjudicateExperiment({ ...e, scale_value: e.scale_value === null ? null : Number(e.scale_value), stop_value: e.stop_value === null ? null : Number(e.stop_value) },
     { observed_value: observed, observed_n: v.observed_n, guardrail_observations: v.guardrail_observations, gate_inputs: v.gate_inputs });
   const status = ({ scale: 'scaled', change: 'changed', stop: 'stopped', insufficient_sample: 'readout' } as const)[ev.decision];

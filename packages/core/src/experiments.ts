@@ -1,6 +1,11 @@
 import { cmp, type Op } from './recommend';
 
-export interface Guardrail { key: string; label: string; op: Op | string; value: number; /** a breach stops the bet (named in the stop rule) instead of only blocking Scale */ hard?: boolean }
+export interface Guardrail {
+  key: string; label: string; op: Op | string; value: number;
+  /** a breach stops the bet (named in the stop rule) instead of only blocking Scale */ hard?: boolean;
+  /** separate hard confirmation floor: breaching THIS threshold is a Stop, while `op/value` is only the Scale floor (e.g. B5: ≥85% to scale, <75% stops) */
+  stop_op?: Op | string; stop_value?: number;
+}
 export interface ExperimentRule {
   scale_op: Op | string | null; scale_value: number | null; stop_op: Op | string | null; stop_value: number | null; min_sample?: number | null;
   guardrails?: unknown; bet_id?: string | null;
@@ -12,7 +17,7 @@ export interface ReadoutInput {
   /** inputs for distinct secondary gates, keyed by gate input key */ gate_inputs?: Record<string, number | null | undefined>;
 }
 export interface Reason { kind: 'scale' | 'stop' | 'sample' | 'guardrail' | 'missing'; op: string; threshold: number; value: number | null; passed: boolean; label?: string }
-export interface GuardrailResult extends Guardrail { observed: number | null; passed: boolean | null }
+export interface GuardrailResult extends Guardrail { observed: number | null; passed: boolean | null; stopped?: boolean }
 export interface GateResult { key: string; label: string; decision: 'release' | 'hold' | 'scale_next_edition' | 'not_demonstrated' | 'insufficient_evidence'; reasons: Reason[]; missing: string[] }
 export interface ExperimentEvaluation { decision: ExperimentDecision; reasons: Reason[]; missing: string[]; guardrails: GuardrailResult[]; gates: GateResult[] }
 
@@ -24,8 +29,14 @@ export const EXPERIMENT_GATES: Record<string, { key: string; label: string; inpu
     inputs: [{ key: 'itt_lift_pp', label: 'ITT show-up lift', op: '>=', value: 4, unit: 'pp' }, { key: 'itt_ci_low_pp', label: 'Interval lower bound', op: '>', value: 0, unit: 'pp' }] },
 };
 
-export const parseGuardrails = (raw: unknown): Guardrail[] =>
-  Array.isArray(raw) ? raw.filter((g): g is Guardrail => !!g && typeof g === 'object' && typeof (g as any).key === 'string' && typeof (g as any).value === 'number') : [];
+const OPS = ['>=', '>', '<=', '<'];
+const isTyped = (g: any): g is Guardrail => !!g && typeof g === 'object' && typeof g.key === 'string' && typeof g.value === 'number' && Number.isFinite(g.value) && OPS.includes(g.op)
+  && (g.stop_op === undefined || (OPS.includes(g.stop_op) && typeof g.stop_value === 'number'));
+/** Typed guardrail records only. Anything else (legacy free-text strings, malformed objects) is reported by `unparsedGuardrails`. */
+export const parseGuardrails = (raw: unknown): Guardrail[] => (Array.isArray(raw) ? raw.filter(isTyped) : []);
+/** Mandatory rules we could not turn into a typed check. A non-null non-array value counts as one unparsed rule. */
+export const unparsedGuardrails = (raw: unknown): string[] =>
+  raw == null ? [] : Array.isArray(raw) ? raw.filter((g) => !isTyped(g)).map((g) => (typeof g === 'string' ? g : JSON.stringify(g))) : [JSON.stringify(raw)];
 
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 
@@ -43,12 +54,16 @@ export function adjudicateExperiment(e: ExperimentRule, input: ReadoutInput): Ex
     if (n === null) missing.push(`sample size (minimum ${e.min_sample})`);
     else reasons.push({ kind: 'sample', op: '>=', threshold: e.min_sample, value: n, passed: n >= e.min_sample, label: 'sample size' });
   }
+  // an unrecognised mandatory rule can never be silently dropped: it makes the readout insufficient evidence
+  for (const u of unparsedGuardrails(e.guardrails)) missing.push(`unrecognised guardrail rule (cannot be checked): ${u}`);
   const guardrails: GuardrailResult[] = parseGuardrails(e.guardrails).map((g) => {
     const obs = num(input.guardrail_observations?.[g.key]);
     if (obs === null) { missing.push(`guardrail: ${g.label}`); return { ...g, observed: null, passed: null }; }
     const passed = cmp(obs, g.op as Op, g.value);
     reasons.push({ kind: 'guardrail', op: String(g.op), threshold: g.value, value: obs, passed, label: g.label });
-    return { ...g, observed: obs, passed };
+    const stopped = g.stop_op ? cmp(obs, g.stop_op as Op, g.stop_value!) : false;
+    if (g.stop_op) reasons.push({ kind: 'guardrail', op: String(g.stop_op), threshold: g.stop_value!, value: obs, passed: !stopped, label: `${g.label} (hard floor: stop if ${g.stop_op} ${g.stop_value})` });
+    return { ...g, observed: obs, passed, stopped };
   });
   const gates: GateResult[] = [];
   const gd = e.bet_id ? EXPERIMENT_GATES[e.bet_id] : undefined;
@@ -62,7 +77,11 @@ export function adjudicateExperiment(e: ExperimentRule, input: ReadoutInput): Ex
     const decision = gMissing.length ? 'insufficient_evidence' : gReasons.every((r) => r.passed) ? gd.pass : gd.fail;
     gates.push({ key: gd.key, label: gd.label, decision, reasons: gReasons, missing: gMissing });
   }
-  const finish = (decision: ExperimentDecision): ExperimentEvaluation => ({ decision, reasons, missing, guardrails, gates });
+  const finish = (decision: ExperimentDecision): ExperimentEvaluation => {
+    // a Stop decision blocks any reserve release: the reserve only funds bets that are still running
+    if (decision === 'stop') for (const g of gates) if (g.decision === 'release') { g.decision = 'hold'; g.reasons.push({ kind: 'stop', op: '', threshold: 0, value: null, passed: false, label: 'blocked: experiment decision is Stop' }); }
+    return { decision, reasons, missing, guardrails, gates };
+  };
   if (missing.length) { for (const m of missing) reasons.push({ kind: 'missing', op: '', threshold: 0, value: null, passed: false, label: m }); return finish('insufficient_sample'); }
   const sample = reasons.find((r) => r.kind === 'sample');
   if (sample && !sample.passed) return finish('insufficient_sample');
@@ -71,11 +90,42 @@ export function adjudicateExperiment(e: ExperimentRule, input: ReadoutInput): Ex
   const scale = e.scale_op && e.scale_value !== null ? cmp(v, e.scale_op as Op, e.scale_value) : false;
   if (e.stop_op && e.stop_value !== null) reasons.push({ kind: 'stop', op: String(e.stop_op), threshold: e.stop_value, value: v, passed: stop, label: 'stop rule' });
   if (e.scale_op && e.scale_value !== null) reasons.push({ kind: 'scale', op: String(e.scale_op), threshold: e.scale_value, value: v, passed: scale, label: 'scale rule' });
-  const hardBreach = guardrails.some((g) => g.hard && g.passed === false), anyBreach = guardrails.some((g) => g.passed === false);
+  const hardBreach = guardrails.some((g) => (g.hard && g.passed === false) || g.stopped), anyBreach = guardrails.some((g) => g.passed === false);
   return finish(stop || hardBreach ? 'stop' : scale && !anyBreach ? 'scale' : 'change');
 }
 
 /** Back-compat: KPI + optional sample only (no guardrails). */
 export function evaluateExperiment(e: ExperimentRule, observed: number, n?: number | null): ExperimentEvaluation {
   return adjudicateExperiment({ ...e, guardrails: [] }, { observed_value: observed, observed_n: n });
+}
+
+export interface ObservationCheck { value: number | null; errors: string[] }
+/**
+ * Shared (server transaction + readout form) validation of a reported observation.
+ * Counts win: when numerator/denominator are supplied the KPI is computed from them, and an explicit KPI that disagrees is rejected.
+ */
+export function validateObservation(e: { kpi_unit?: string | null }, input: ReadoutInput): ObservationCheck {
+  const errors: string[] = [], pct = e.kpi_unit === '%';
+  const { kpi_numerator: a, kpi_denominator: b } = input;
+  const nn = (x: unknown) => x !== null && x !== undefined;
+  let value = num(input.observed_value);
+  const n = num(input.observed_n);
+  if (n !== null && (!Number.isInteger(n) || n < 0)) errors.push('Sample size must be a whole number ≥ 0.');
+  if (nn(a) !== nn(b)) errors.push('Provide both the KPI numerator and denominator, or neither.');
+  else if (nn(a) && nn(b)) {
+    if (!Number.isInteger(a) || !Number.isInteger(b) || a! < 0 || b! <= 0) errors.push('KPI numerator must be a whole number ≥ 0 and the denominator a whole number > 0.');
+    else if (pct && a! > b!) errors.push(`KPI numerator (${a}) cannot exceed the denominator (${b}) for a % KPI.`);
+    else if (pct && n !== null && b! > n) errors.push(`KPI denominator (${b}) cannot exceed the sample size (${n}).`);
+    else {
+      const ratio = (pct ? 100 : 1) * a! / b!;
+      if (value !== null && Math.abs(value - ratio) > Math.max(0.05, Math.abs(ratio) * 0.005)) errors.push(`Reported KPI ${value} conflicts with its counts ${a}/${b} = ${Math.round(ratio * 100) / 100}. Fix one of them.`);
+      value = ratio;
+    }
+  }
+  if (value !== null && pct && (value < 0 || value > 100)) errors.push(`A % KPI must be between 0 and 100 (got ${value}).`);
+  for (const [k, v] of Object.entries(input.guardrail_observations ?? {})) {
+    if (typeof v !== 'number') continue;
+    if (v < 0 || (/_pct$/.test(k) && v > 100)) errors.push(`Guardrail ${k} out of range (${v}).`);
+  }
+  return { value, errors };
 }

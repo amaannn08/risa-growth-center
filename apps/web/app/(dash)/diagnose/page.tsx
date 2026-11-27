@@ -11,8 +11,7 @@ export default async function Diagnose({ searchParams }: { searchParams: SP }) {
   const ctx = await getCtx(searchParams);
   const { ds, asOf } = ctx;
   const findings = diagnose(ds, asOf);
-  const taskRows = await ctx.db.query<{ id: number; insight_id: string }>('SELECT id, insight_id FROM tasks WHERE insight_id IS NOT NULL');
-  const taskFor = new Map(taskRows.map((t) => [t.insight_id, t.id]));
+  const taskFor = new Map(ctx.mgmt.tasks.filter((t) => t.insight_id).map((t) => [t.insight_id as string, t.id as number]));
   const weeks = weeklySeries(ds, asOf).filter((w) => w.from <= asOf); // clipped at as-of; the running week is shown but excluded from medians/colouring
   const started = asOf >= istDate(ds.eventMs.startsAt);
   const cohorts = showUpByRegistrationWeek(ds, asOf);

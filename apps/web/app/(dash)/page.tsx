@@ -27,8 +27,7 @@ export default async function Overview({ searchParams }: { searchParams: SP }) {
   const backtest = projectionBacktest(ds, assumptions);
   const model = liveStrategy(ctx);
   const findings = diagnose(ds, asOf).slice(0, 3);
-  const taskRows = await ctx.db.query<{ id: number; insight_id: string }>('SELECT id, insight_id FROM tasks WHERE insight_id IS NOT NULL');
-  const taskFor = new Map(taskRows.map((t) => [t.insight_id, t.id]));
+  const taskFor = new Map(ctx.mgmt.tasks.filter((t) => t.insight_id).map((t) => [t.insight_id as string, t.id as number]));
   const ownerOf = (cid?: string) => (cid ? ds.campaigns[cid]?.owner_id ?? null : null);
 
   const vis = tp?.unique_external_visitors_goal, reg = tp?.registration_goal, idn = tp?.identified_external_people_goal, bud = tp?.marketing_budget_inr;

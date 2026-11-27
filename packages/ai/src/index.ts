@@ -7,3 +7,4 @@ export * from './jsonFallback';
 export * from './missingData';
 export * from './mock';
 export * from './clarify';
+export * from './evidence';
