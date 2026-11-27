@@ -17,3 +17,6 @@ export * from './diagnose';
 export * from './strategy/defaults';
 export * from './strategy/model';
 export * from './strategy/content';
+export * from './diff';
+export * from './experiments';
+export * from './strategy/history';

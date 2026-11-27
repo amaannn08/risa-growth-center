@@ -1,0 +1,17 @@
+CREATE SCHEMA IF NOT EXISTS seed;
+CREATE TABLE IF NOT EXISTS seed.event (LIKE public.event INCLUDING ALL);
+CREATE TABLE IF NOT EXISTS seed.target_versions (LIKE public.target_versions INCLUDING ALL);
+CREATE TABLE IF NOT EXISTS seed.campaigns (LIKE public.campaigns INCLUDING ALL);
+CREATE TABLE IF NOT EXISTS seed.daily_marketing (LIKE public.daily_marketing INCLUDING ALL);
+CREATE TABLE IF NOT EXISTS seed.people (LIKE public.people INCLUDING ALL);
+CREATE TABLE IF NOT EXISTS seed.interactions (LIKE public.interactions INCLUDING ALL);
+CREATE TABLE IF NOT EXISTS seed.registrations (LIKE public.registrations INCLUDING ALL);
+CREATE TABLE IF NOT EXISTS seed.registration_history (LIKE public.registration_history INCLUDING ALL);
+CREATE TABLE IF NOT EXISTS seed.checkins (LIKE public.checkins INCLUDING ALL);
+CREATE TABLE IF NOT EXISTS seed.team_members (LIKE public.team_members INCLUDING ALL);
+CREATE TABLE IF NOT EXISTS seed.bets (LIKE public.bets INCLUDING ALL);
+CREATE TABLE IF NOT EXISTS seed.rejected_ideas (LIKE public.rejected_ideas INCLUDING ALL);
+CREATE TABLE IF NOT EXISTS seed.experiments (LIKE public.experiments INCLUDING ALL);
+CREATE TABLE IF NOT EXISTS seed.tasks (LIKE public.tasks INCLUDING ALL);
+CREATE TABLE IF NOT EXISTS seed.plan_assumptions (LIKE public.plan_assumptions INCLUDING ALL);
+CREATE TABLE IF NOT EXISTS seed.decision_rules (LIKE public.decision_rules INCLUDING ALL);

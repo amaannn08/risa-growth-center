@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BETS, DEFAULT_ASSUMPTIONS, DEFAULT_HISTORY, scoreBets, snapshot, strategyModel } from '../src';
+import { BETS, DEFAULT_ASSUMPTIONS, DEFAULT_HISTORY, historyFromDataset, scoreBets, snapshot, strategyModel } from '../src';
 import { ds } from './helpers';
 
 const m = strategyModel();
@@ -74,5 +74,13 @@ describe('strategy model §7', () => {
       const f = snap.campaigns![h.campaign_id]!.first_touch;
       expect([h.spend, h.registered, h.confirmed, h.visitors]).toEqual([f.marketing_spend_inr, f.registered_people, f.confirmed_people, f.registered_and_attended_people]);
     }
+  });
+});
+
+describe('historyFromDataset', () => {
+  it('equals DEFAULT_HISTORY on the pristine dataset', () => {
+    const h = historyFromDataset(ds());
+    expect(h.history).toEqual(DEFAULT_HISTORY);
+    expect(h.visitors2025).toBe(2050);
   });
 });
