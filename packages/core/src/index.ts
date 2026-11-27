@@ -21,3 +21,4 @@ export * from './diff';
 export * from './experiments';
 export * from './strategy/history';
 export * from './strategy/slides';
+export * from './evidence';

@@ -1,7 +1,7 @@
 'use client';
 import { toast } from 'sonner';
 
-export interface MutResult { ok: boolean; data_revision?: number; id?: string | null; error?: { code: string; message: string }; result_ref?: string }
+export interface MutResult { ok: boolean; row?: unknown; data_revision?: number; id?: string | null; error?: { code: string; message: string }; result_ref?: string }
 /** POST /api/mutations/:entity — toasts the outcome. Caller should router.refresh() on ok. */
 export async function mutate(entity: string, action: string, body: Record<string, unknown>, opts: { quiet?: boolean } = {}): Promise<MutResult> {
   try {

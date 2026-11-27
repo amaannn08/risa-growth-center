@@ -1,4 +1,4 @@
-import { KNOWN_MISSING, dataQuality, diagnose, fmtInt, fmtNum, fmtPct, istDate, medianDaysToConfirm, showUpByRegistrationWeek, snapshot, weeklySeries } from '@gc/core';
+import { KNOWN_MISSING, dataQuality, diagnose, fmtInt, fmtNum, fmtPct, istDate, medianDaysToConfirm, showUpByRegistrationWeek, snapshot, weekIsRunning, weeklySeries } from '@gc/core';
 import { getCtx, type SP } from '@/lib/data';
 import { Caveat, PageTitle, Panel, Pill, td, tdr, th, thr } from '@/components/kit';
 import { CreateTaskButton } from '@/components/CreateTaskButton';
@@ -13,12 +13,12 @@ export default async function Diagnose({ searchParams }: { searchParams: SP }) {
   const findings = diagnose(ds, asOf);
   const taskRows = await ctx.db.query<{ id: number; insight_id: string }>('SELECT id, insight_id FROM tasks WHERE insight_id IS NOT NULL');
   const taskFor = new Map(taskRows.map((t) => [t.insight_id, t.id]));
-  const weeks = weeklySeries(ds).filter((w) => w.from <= asOf);
+  const weeks = weeklySeries(ds, asOf).filter((w) => w.from <= asOf); // clipped at as-of; the running week is shown but excluded from medians/colouring
   const started = asOf >= istDate(ds.eventMs.startsAt);
   const cohorts = showUpByRegistrationWeek(ds, asOf);
   const medians = medianDaysToConfirm(ds, asOf);
   const dq: any = dataQuality(ds);
-  const snap = snapshot(ds, asOf, false).overall;
+  const snap = snapshot(ds, asOf, false).overall; // selected as-of snapshot (walk-ins, headline conversion, event counts)
   const byTRV: any[] = dq.checkins_by_type_result_verification;
   const nonExternalVerified = byTRV.filter((r) => r.person_type !== 'external' && r.result === 'admitted' && r.verification === 'verified').reduce((t, r) => t + r.events, 0);
   const orphans = Object.values(dq.orphan_foreign_keys as Record<string, Record<string, { rows: number }>>).reduce((t, tb) => t + Object.values(tb).reduce((s, c) => s + c.rows, 0), 0);
@@ -27,7 +27,7 @@ export default async function Diagnose({ searchParams }: { searchParams: SP }) {
 
   const heat = ds.campaignIds.map((cid) => {
     const cells = weeks.map((w) => { const p = w.campaigns[cid]!.first_touch.period_increment; return { regs: p.registered_people, clicks: p.clicks, rpc: p.clicks ? p.registered_people / p.clicks : null }; });
-    const vals = cells.map((c) => c.rpc).filter((v): v is number => v !== null).sort((a, b) => a - b);
+    const vals = cells.filter((_, i) => !weekIsRunning(weeks[i]!)).map((c) => c.rpc).filter((v): v is number => v !== null).sort((a, b) => a - b);
     const med = vals[Math.floor(vals.length / 2)] ?? 0;
     return { cid, cells, med };
   });
@@ -61,20 +61,20 @@ export default async function Diagnose({ searchParams }: { searchParams: SP }) {
       <Panel title="Week-over-week heat table: registrations / clicks by first-touch campaign" tag="D" right="cell colour: registrations-per-click vs campaign median">
         <div className="overflow-x-auto">
           <table className="text-xs" data-testid="heat">
-            <thead><tr><th className={th}>Campaign</th>{weeks.map((w) => <th key={w.from} className={thr} title={`${w.from} → ${w.through}`}>{w.from.slice(5)}</th>)}</tr></thead>
+            <thead><tr><th className={th}>Campaign</th>{weeks.map((w) => <th key={w.from} className={thr} title={`${w.from} → ${w.through}${weekIsRunning(w) ? ' (partial: week still running at the as-of date)' : ''}`}>{w.from.slice(5)}{weekIsRunning(w) ? '*' : ''}</th>)}</tr></thead>
             <tbody>{heat.map((h) => (
               <tr key={h.cid} className="border-t"><td className={`${td} whitespace-nowrap`}><span className="mr-1 inline-block size-2 rounded-full" style={{ background: colorOf(h.cid) }} />{ds.campaigns[h.cid]!.campaign_name}</td>
                 {h.cells.map((c, i) => {
                   const r = c.rpc !== null && h.med ? c.rpc / h.med : 1;
-                  const bg = c.clicks >= 300 && r < 0.6 ? 'bg-red-100' : c.clicks >= 300 && r > 1.5 ? 'bg-emerald-100' : c.clicks >= 300 && c.regs === 0 ? 'bg-red-200' : '';
+                  const bg = weekIsRunning(weeks[i]!) ? 'bg-slate-50 italic' : c.clicks >= 300 && r < 0.6 ? 'bg-red-100' : c.clicks >= 300 && r > 1.5 ? 'bg-emerald-100' : c.clicks >= 300 && c.regs === 0 ? 'bg-red-200' : '';
                   return <td key={i} className={`${tdr} ${bg}`} data-cell={`${h.cid}:${weeks[i]!.from}`} title={`${c.regs} regs / ${c.clicks} clicks`}>{c.regs}<span className="text-slate-400">/{c.clicks}</span></td>;
                 })}</tr>))}</tbody>
           </table>
         </div>
-        <Caveat>Weeks run Monday–Sunday (first week partial). Red = registrations per click below 60% of that campaign’s median on ≥300 clicks. Cause is not in the data.</Caveat>
+        <Caveat>Weeks run Monday–Sunday. * = partial week (clipped at the as-of date): shown, but excluded from medians, colouring and like-for-like alerts. Red = registrations per click below 60% of that campaign’s median on ≥300 clicks. Cause is not in the data.</Caveat>
       </Panel>
 
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="grid gap-4 lg:grid-cols-2 [&>*]:min-w-0">
         <Panel title="Cohort lag: show-up by registration week" tag="D">
           <table className="w-full"><thead><tr><th className={th}>Registered week</th><th className={thr}>Registered</th><th className={thr}>Confirmed now</th><th className={thr}>Attended</th><th className={thr}>Show-up</th></tr></thead>
             <tbody>{cohorts.map((c) => <tr key={c.week_start} className="border-t"><td className={td}>{c.week_start}</td><td className={tdr}>{c.registered}</td><td className={tdr}>{c.confirmed_now}</td><td className={tdr}>{c.attended}</td><td className={tdr}>{started ? fmtPct(c.show_up, 1) : '—'}</td></tr>)}</tbody></table>
@@ -82,11 +82,11 @@ export default async function Diagnose({ searchParams }: { searchParams: SP }) {
           <ul className="mt-1 grid grid-cols-2 gap-x-4 text-sm">{ds.campaignIds.map((c) => <li key={c} className="flex justify-between"><span>{ds.campaigns[c]!.campaign_name}</span><b className="tabular-nums">{medians[c] === null || medians[c] === undefined ? '—' : fmtNum(medians[c]!, 1)}</b></li>)}</ul>
         </Panel>
 
-        <Panel title="Data-quality panel" tag="D" right="recomputed live; edits show up here">
+        <Panel title="Data-quality panel" tag="D" right="reconciliation over the FULL dataset (through coverage end), not scoped to the as-of date; walk-ins and headline use the selected date">
           <ul className="space-y-1 text-sm" data-testid="dq">
             <li><b>Duplicates removed:</b> {dups.map(([k, v]) => `${k} ${v.duplicate_extra_rows}`).join(' · ') || 'none'} (identical retries; conflicting repeats are rejected)</li>
             <li><b>{dq.cancelled_then_reconfirmed_count}</b> registrations cancelled then reconfirmed (one registration ID, status history appended)</li>
-            <li><b>{fmtInt(dq.verified_external_unattributed_checkin_people)}</b> verified walk-ins with no campaign or registration (headline 73.21% includes them)</li>
+            <li><b>{fmtInt(snap.attended_unregistered_people)}</b> verified walk-ins with no registration as of {asOf} (headline {started ? fmtPct(snap.rates.attendees_per_registration_headline_including_walkins, 2) : '—'} includes them)</li>
             <li><b>{nonExternalVerified}</b> verified admissions of internal/staff/test people (excluded from visitors)</li>
             <li><b>{dq.checkins_by_result.denied}</b> denied · <b>{dq.checkins_by_result.pending}</b> pending (unverified) check-ins</li>
             <li>Verification sources (external visitors): scanner total <b>{fmtInt(vs.scanner_total)}</b>, manual-only <b>+{fmtInt(vs.manual_only)}</b>, both {vs.both}</li>

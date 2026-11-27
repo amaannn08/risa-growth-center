@@ -42,6 +42,14 @@ export default async function Slides() {
         html, body { margin: 0; background: white }
         @media print { .slide { zoom: 0.666667; } }
         @media screen { .slide { margin: 16px auto; box-shadow: 0 2px 12px rgba(0,0,0,.2) } }
+        /* web preview only: scale the fixed 1920x1080 frame to the viewport; the print frame above is untouched */
+        @media screen and (max-width: 1999px) { .slide { zoom: 0.9 } }
+        @media screen and (max-width: 1799px) { .slide { zoom: 0.75 } }
+        @media screen and (max-width: 1499px) { .slide { zoom: 0.6 } }
+        @media screen and (max-width: 1199px) { .slide { zoom: 0.5 } }
+        @media screen and (max-width: 999px) { .slide { zoom: 0.4 } }
+        @media screen and (max-width: 799px) { .slide { zoom: 0.3 } }
+        @media screen and (max-width: 599px) { .slide { zoom: 0.19 } }
         .slide { font-family: var(--font-sans), system-ui, sans-serif; font-variant-numeric: tabular-nums }
       `}</style>
 

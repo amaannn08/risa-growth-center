@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { snapshot } from '@gc/core';
 import {
   MutationError, addCheckin, addDailyMarketing, addPerson, addRegistration, addTargetVersion, applyMutation, changeRegistrationStatus, confirmDraft, createDraft,
-  createDb, deleteCampaign, discardDraft, loadDataset, resetToSeed, seedDb, updateCampaign, verifyAgainstReference, type Db,
+  createDb, deleteCampaign, discardDraft, loadDataset, resetToSeed, seedDb, updateCampaign, verifyAgainstReference, withClient, type Db,
 } from '../src';
 
 let db: Db;
@@ -108,8 +108,58 @@ describe('db (PGlite)', () => {
     const rev0 = await rev();
     await applyMutation(db, 'campaign', 'update', { id: 'C02', patch: { status: 'paused' } });
     expect((await loadDataset(db)).ds.campaigns.C02!.status).toBe('paused');
-    await applyMutation(db, 'experiment', 'readout', { id: 3, observed_value: 17, observed_n: 250, decision: 'scale' });
+    await applyMutation(db, 'experiment', 'readout', { id: 3, observed_value: 17, observed_n: 250, guardrail_observations: { abuse_pct: 2, visitor_cost_inr: 120 }, decision: 'stop' /* client decision is ignored */ });
     expect((await db.query('SELECT status FROM experiments WHERE id=3'))[0]!.status).toBe('scaled');
     expect(await rev()).toBe(rev0 + 2);
   });
 });
+
+describe('experiment readout is adjudicated on the server (slide rules enforced)', () => {
+  const readout = async (id: number, input: Record<string, unknown>) => {
+    await applyMutation(db, 'experiment', 'readout', { id, ...input });
+    return (await db.query('SELECT status::text AS status, decision, observed_value::float8 AS v, observation FROM experiments WHERE id=$1', [id]))[0] as any;
+  };
+  it('ignores the client decision; records numerator/denominator and guardrail observations', async () => {
+    const r = await readout(3, { kpi_numerator: 40, kpi_denominator: 200, observed_n: 200, guardrail_observations: { abuse_pct: 2, visitor_cost_inr: 120 }, decision: 'stop' });
+    expect(r.v).toBeCloseTo(20); expect(r.decision).toBe('scale'); expect(r.status).toBe('scaled');
+    expect(r.observation.kpi_numerator).toBe(40); expect(r.observation.kpi_denominator).toBe(200);
+    expect(r.observation.guardrail_observations.map((g: any) => [g.key, g.observed, g.passed])).toEqual([['abuse_pct', 2, true], ['visitor_cost_inr', 120, true]]);
+  });
+  it('missing sample (or any mandatory input) → insufficient evidence, never a decision', async () => {
+    const r = await readout(3, { observed_value: 30, guardrail_observations: { abuse_pct: 1, visitor_cost_inr: 100 }, decision: 'scale' });
+    expect(r.decision).toBe('insufficient_sample'); expect(r.status).toBe('readout');
+    expect(r.observation.missing.join(' ')).toMatch(/sample size/);
+    const g = await readout(3, { observed_value: 30, observed_n: 300 });
+    expect(g.decision).toBe('insufficient_sample'); expect(g.observation.missing.join(' ')).toMatch(/guardrail/);
+  });
+  it('a breached guardrail blocks Scale; a hard breach stops', async () => {
+    expect((await readout(1, { observed_value: 20, observed_n: 20, guardrail_observations: { confirmed_pct: 70, visitor_cost_inr: 100 } })).decision).toBe('change');
+    expect((await readout(3, { observed_value: 20, observed_n: 250, guardrail_observations: { abuse_pct: 9, visitor_cost_inr: 100 } })).decision).toBe('stop');
+  });
+  it('B5 reserve gate and B4 final holdout are separate decisions', async () => {
+    const b5 = await readout(5, { observed_value: 12, observed_n: 500, guardrail_observations: { confirmation_pct: 90, marginal_visitor_cost_inr: 150 }, gate_inputs: { forecast_extra_visitors: 30, forecast_visitor_cost_inr: 140 } });
+    expect(b5.decision).toBe('scale'); expect(b5.observation.gates[0]).toMatchObject({ key: 'reserve_release', decision: 'hold' });
+    const b4 = await readout(4, { observed_value: 60, observed_n: 1800, guardrail_observations: { delivery_pct: 95, optout_pct: 1 }, gate_inputs: { itt_lift_pp: 4.5 } });
+    expect(b4.decision).toBe('scale'); expect(b4.observation.gates[0]).toMatchObject({ key: 'final_holdout_itt', decision: 'insufficient_evidence' });
+  });
+});
+
+describe('evidence + audit client id', () => {
+  it('confirmed Copilot draft stores the canonical evidence shape (items, as_of, data_revision)', async () => {
+    const ev = { items: [{ tool: 'get_attendance', metric: 'saturday_distinct_visitors', value: 1430 }], as_of: '2025-04-20', data_revision: 7 };
+    const d = await createDraft(db, { kind: 'task', payload: { title: 'Audit Saturday', priority: 'p1' }, evidence: ev });
+    const res = await confirmDraft(db, d.draft_id);
+    const t = (await db.query('SELECT evidence, created_via::text AS via FROM tasks WHERE id=$1', [Number(res.id)]))[0] as any;
+    expect(t.evidence).toEqual(ev); expect(t.via).toBe('copilot');
+    // legacy array input is normalised to the same shape
+    const m = await applyMutation(db, 'task', 'create', { title: 'x', evidence: [{ tool: 'a', metric: 'b', value: 1 }] });
+    expect((await db.query('SELECT evidence FROM tasks WHERE id=$1', [Number(m.id)]))[0]!.evidence).toMatchObject({ items: [{ tool: 'a', metric: 'b', value: 1 }] });
+  });
+  it('records the per-request client id on audit rows', async () => {
+    await withClient('abc123', () => applyMutation(db, 'task', 'create', { title: 'by client' }));
+    expect((await db.query(`SELECT client_id FROM audit_log WHERE entity='tasks' ORDER BY id DESC LIMIT 1`))[0]!.client_id).toBe('abc123');
+    await withClient('resetter', () => resetToSeed(db, 'user'));
+    expect((await db.query(`SELECT client_id FROM audit_log WHERE action='reset' ORDER BY id DESC LIMIT 1`))[0]!.client_id).toBe('resetter');
+  });
+});
+

@@ -8,14 +8,14 @@ export function Tag({ t, title }: { t: 'S' | 'D' | 'A' | string; title?: string 
 
 export function Panel({ title, tag, right, children, className = '', id }: { title?: ReactNode; tag?: string; right?: ReactNode; children: ReactNode; className?: string; id?: string }) {
   return (
-    <section id={id} className={`rounded-lg border bg-white ${className}`}>
+    <section id={id} className={`min-w-0 rounded-lg border bg-white ${className}`}>
       {(title || right) && (
         <div className="flex items-center gap-2 border-b px-3 py-2">
           <h2 className="text-sm font-semibold">{title}</h2>{tag && <Tag t={tag} />}
           <div className="ml-auto text-xs text-slate-500">{right}</div>
         </div>
       )}
-      <div className="p-3">{children}</div>
+      <div className="min-w-0 overflow-x-auto p-3">{children}</div>
     </section>
   );
 }

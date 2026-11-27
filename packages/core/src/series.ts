@@ -22,12 +22,18 @@ export interface WeekRow {
   campaigns: Record<string, { first_touch: WeekMode; registration_source: WeekMode; checkin_source_attendance_new: number }>;
 }
 
-export function weeklySeries(ds: Dataset): WeekRow[] {
-  const ck = 'weekly';
+/**
+ * Weekly (Mon–Sun) series. `through` clips the series at an as-of date (IST EOD): the running week then ends at `through` and carries only
+ * what was posted by then (see `weekIsRunning`). Default = end of coverage (the golden reference series).
+ */
+export function weeklySeries(ds: Dataset, through?: string): WeekRow[] {
+  const covEnd = coverageEnd(ds);
+  const cut = through && through < covEnd ? through : undefined;
+  const ck = cut ? `weekly:${cut}` : 'weekly';
   const hit = ds._cache.get(ck) as WeekRow[] | undefined;
   if (hit) return hit;
   let weekFirst = coverageStart(ds);
-  const end = coverageEnd(ds);
+  const end = cut ?? covEnd;
   let previous = snapshot(ds, addDays(weekFirst, -1));
   const weeks: WeekRow[] = [];
   while (weekFirst <= end) {
@@ -69,6 +75,9 @@ export function weeklySeries(ds: Dataset): WeekRow[] {
   ds._cache.set(ck, weeks);
   return weeks;
 }
+
+/** True when the week is still running at its `through` date (not yet its Sunday): its period values are partial and not like-for-like. */
+export const weekIsRunning = (w: Pick<WeekRow, 'through'>) => weekdayMon0(w.through) !== 6;
 
 /** Snapshot (no campaigns) for each day of coverage. */
 export function dailyOverall(ds: Dataset, from = coverageStart(ds), through = coverageEnd(ds)): Snapshot[] {

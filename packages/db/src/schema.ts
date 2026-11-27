@@ -163,6 +163,7 @@ export const experiments = pgTable('experiments', {
   change_rule: text('change_rule'), stop_note: text('stop_note'), guardrails: jsonb('guardrails'), readout_date: date('readout_date', { mode: 'string' }),
   status: expStatus('status').notNull().default('planned'),
   observed_value: numeric('observed_value', { mode: 'number' }), observed_n: integer('observed_n'), decision: text('decision'), owner_id: text('owner_id'),
+  /** server-adjudicated readout record: KPI numerator/denominator, guardrail observations, gate results, reasons, missing inputs */ observation: jsonb('observation'),
 });
 
 export const tasks = pgTable('tasks', {
@@ -197,8 +198,11 @@ export const actionDrafts = pgTable('action_drafts', {
 export const auditLog = pgTable('audit_log', {
   id: serial('id').primaryKey(), at: ts('at').notNull().defaultNow(), actor: actorEnum('actor').notNull(),
   entity: text('entity').notNull(), entity_id: text('entity_id'), action: auditAction('action').notNull(),
-  before: jsonb('before'), after: jsonb('after'), data_revision: integer('data_revision').notNull(),
+  before: jsonb('before'), after: jsonb('after'), data_revision: integer('data_revision').notNull(), client_id: text('client_id'),
 });
+
+/** Durable fixed-window counters (chat rate limit, daily cap, mutation limit). Atomic upsert, expiring. */
+export const rateCounters = pgTable('rate_counters', { key: text('key').primaryKey(), count: integer('count').notNull(), expires_at: ts('expires_at').notNull() });
 
 export const chatLogs = pgTable('chat_logs', {
   id: serial('id').primaryKey(), at: ts('at').notNull().defaultNow(), conversation_id: text('conversation_id'), ip_hash: text('ip_hash'),

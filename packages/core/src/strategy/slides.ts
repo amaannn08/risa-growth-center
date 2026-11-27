@@ -59,7 +59,7 @@ export function slideContent(m: StrategyModel, i: SlideInputs = {}) {
         { label: `Reserve ${fmtInr(b.reserve)}`, value: b.reserve },
       ],
       budgetNote: `${fmtInr(b.reference.spend)} + ${fmtInr(b.bets_spend)} + ${fmtInr(b.reserve)} = ${fmtInr(b.cap)} cap (base; stretch spends ${fmtInr(s.spend)}, reserve ${fmtInr(s.reserve)}).`,
-      double: 'Double down: B1 + B2, the highest show-up channels (College Partnerships 85.6%, Campus Ambassadors 75%).',
+      double: 'Double down: B1 + B2. College Partnerships had 2025’s best show-up (85.6%); Ambassadors (75%, 5th of 7) earn it on campus access, scale and feasibility, not show-up.',
       reject: ['Creator expansion (₹337/visitor, 50% show-up)', 'Broad paid prospecting (retarget only)', '₹49 deposit (reach loss)', 'Gamified passport (protect ingress)'],
       rejectedCount: REJECTED_IDEAS.length,
       constraints: 'One cohort per person · B1/B2 on disjoint campuses · B4 layered on residual no-shows · B3 needs dev time · capacity caps upside.',

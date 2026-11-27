@@ -3,7 +3,13 @@
  * (or the user's own message). Unmatched numbers are reported, not blocked.
  */
 export interface NumTok { raw: string; value: number; dp: number; pct?: boolean }
-export interface GroundingResult { checked: number; unmatched: string[]; /** figures equal to the sum/difference of two traced figures (allowed, reported separately) */ derived: string[]; ok: boolean }
+export interface GroundingResult {
+  checked: number; unmatched: string[]; /** figures equal to the sum/difference of two traced figures (allowed, reported separately) */ derived: string[];
+  /** figures that appear only in the user's own message: scenario inputs, never evidence */ user_inputs: string[];
+  /** citations `[tool · as_of · rN]` naming a tool that did not run in this turn (or with a different revision/date) */ bad_citations: string[];
+  ok: boolean;
+}
+export interface ExecutedTool { name: string; as_of?: string | null; data_revision?: number | null }
 
 const MONTHS = '(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*';
 
@@ -70,7 +76,7 @@ export function figureMatches(x: number, dp: number, a: number): boolean {
   return Math.abs(Math.abs(a) - Math.abs(x)) <= tol;
 }
 
-/** x is the sum/difference of two OTHER traced figures shown in the same answer, or (for %) the complement of one (tolerance by decimals)? */
+/** x is the sum/difference/ratio of two OTHER traced figures shown in the same answer, or (for %) the complement of one (tolerance by decimals)? */
 function isSimpleDerivation(x: number, dp: number, shown: number[], pct = false): boolean {
   const tol = 0.5 * 10 ** -Math.min(dp, 2) + 1e-9;
   const ax = Math.abs(x);
@@ -79,22 +85,64 @@ function isSimpleDerivation(x: number, dp: number, shown: number[], pct = false)
     if (i === j) continue;
     const a = Math.abs(shown[i]!), b = Math.abs(shown[j]!);
     if (Math.abs(a - b - ax) <= tol || Math.abs(a + b - ax) <= tol) return true;
+    // exact arithmetic on two traced figures: a share / ratio / multiple (a÷b, ×100 for %), only for figures written with decimals or as a %
+    if (b !== 0 && (pct || dp > 0)) {
+      const r = a / b, rtol = 0.5 * 10 ** -dp + 1e-9;
+      if (Math.abs(r - ax) <= rtol || (pct && Math.abs(r * 100 - ax) <= rtol)) return true;
+    }
   }
   return false;
 }
 
-export function groundingCheck(answer: string, toolOutputs: unknown[], userText: string[] = []): GroundingResult {
-  const toks = extractNumbers(answer);
-  const allowed = allowedFrom(toolOutputs, userText);
-  const traced = toks.filter((t) => allowed.some((a) => figureMatches(t.value, t.dp, a)));
-  const shown = [...new Set(traced.map((t) => t.value))];
-  const unmatched: string[] = [], derived: string[] = [];
-  for (const t of toks) {
-    if (traced.includes(t)) continue;
-    if (isSimpleDerivation(t.value, t.dp, shown, t.pct)) derived.push(t.raw); else unmatched.push(t.raw);
+export const CITATION_RE = /\[\s*([a-z_]+)\s*·\s*([^·\]]*?)\s*·\s*r?(\d+)\s*\]/gi;
+
+/** Citations in `answer` that do not correspond to a tool actually executed in this turn (same tool, revision and, when both are dates, as_of). */
+export function badCitations(answer: string, executed: ExecutedTool[]): string[] {
+  const bad: string[] = [];
+  for (const m of answer.matchAll(CITATION_RE)) {
+    const [raw, tool, asOf, rev] = [m[0], m[1]!.toLowerCase(), m[2]!.trim(), Number(m[3])];
+    const runs = executed.filter((e) => e.name === tool);
+    const dateLike = /^\d{4}-\d{2}-\d{2}$/.test(asOf);
+    const ok = runs.some((e) => (e.data_revision == null || e.data_revision === rev) && (!dateLike || e.as_of == null || e.as_of === asOf));
+    if (!ok) bad.push(raw);
   }
-  return { checked: toks.length, unmatched: [...new Set(unmatched)], derived: [...new Set(derived)], ok: unmatched.length === 0 };
+  return [...new Set(bad)];
 }
 
-export const groundingLabel = (g: GroundingResult) =>
-  g.ok ? `✓ All ${g.checked} figures traced to tool results${g.derived.length ? ` (${g.derived.length} derived by sum/difference)` : ''}` : `⚠ ${g.unmatched.length} figure${g.unmatched.length === 1 ? '' : 's'} not traced: ${g.unmatched.join(', ')}`;
+/** Replace unverifiable citations (server-side, for non-streamed modes) with an explicit marker. */
+export function stripBadCitations(answer: string, executed: ExecutedTool[]): string {
+  const bad = new Set(badCitations(answer, executed));
+  return bad.size ? answer.replace(CITATION_RE, (raw) => (bad.has(raw) ? '[unverified citation removed]' : raw)) : answer;
+}
+
+export const executedFrom = (outputsByCall: { name: string; output?: any }[]): ExecutedTool[] =>
+  outputsByCall.map((c) => ({ name: c.name, as_of: c.output?.as_of ?? null, data_revision: c.output?.data_revision ?? null }));
+
+/**
+ * `executed` (optional): the tools that ran in THIS turn; when given, citations are validated against it.
+ * User-typed numbers are scenario inputs: they are reported separately and never count as traced evidence.
+ */
+export function groundingCheck(answer: string, toolOutputs: unknown[], userText: string[] = [], executed?: ExecutedTool[]): GroundingResult {
+  const toks = extractNumbers(answer);
+  const allowed = allowedFrom(toolOutputs);
+  const userAllowed = allowedFrom([], userText);
+  const traced = toks.filter((t) => allowed.some((a) => figureMatches(t.value, t.dp, a)));
+  const shown = [...new Set(traced.map((t) => t.value))];
+  const unmatched: string[] = [], derived: string[] = [], user_inputs: string[] = [];
+  for (const t of toks) {
+    if (traced.includes(t)) continue;
+    if (userAllowed.some((a) => figureMatches(t.value, t.dp, a))) { user_inputs.push(t.raw); continue; }
+    if (isSimpleDerivation(t.value, t.dp, shown, t.pct)) derived.push(t.raw); else unmatched.push(t.raw);
+  }
+  const bad_citations = executed ? badCitations(answer, executed) : [];
+  return { checked: toks.length, unmatched: [...new Set(unmatched)], derived: [...new Set(derived)], user_inputs: [...new Set(user_inputs)], bad_citations, ok: unmatched.length === 0 && bad_citations.length === 0 };
+}
+
+export const groundingLabel = (g: GroundingResult) => {
+  const parts: string[] = [];
+  if (g.unmatched.length) parts.push(`${g.unmatched.length} figure${g.unmatched.length === 1 ? '' : 's'} not traced: ${g.unmatched.join(', ')}`);
+  if (g.bad_citations.length) parts.push(`${g.bad_citations.length} citation${g.bad_citations.length === 1 ? '' : 's'} reference a tool not run in this turn: ${g.bad_citations.join(', ')}`);
+  if (parts.length) return `⚠ ${parts.join(' · ')}`;
+  const extra = [g.derived.length ? `${g.derived.length} derived by arithmetic on traced figures` : '', g.user_inputs.length ? `${g.user_inputs.length} are your scenario inputs, not evidence` : ''].filter(Boolean);
+  return `✓ All ${g.checked} figures traced to tool results${extra.length ? ` (${extra.join('; ')})` : ''}`;
+};

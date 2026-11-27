@@ -54,12 +54,12 @@ export function StrategyWorkbench({ assumptions, history, planBudgets, visitors2
 
       <Panel id="model" title="(a) Target model: calculation chain" tag="A" right="recomputed live from the assumptions below">
         <ModelTable base={m.base} stretch={m.stretch} />
-        <div className="mt-4 grid gap-4 md:grid-cols-3">
+        <div className="mt-4 grid gap-4 md:grid-cols-3 [&>*]:min-w-0">
           <div className="rounded border p-3 text-sm" data-testid="reconciliation">
             <div className="mb-1 text-xs font-medium text-slate-600">Reconciliation</div>
             {(['base', 'stretch'] as const).map((s) => { const r = m.reconciliation[s]; return (
               <div key={s} className="mb-2"><b>{s}</b>: {fmtInt(r.raw_total)} → headline <b>{fmtInt(r.headline)}</b> (floor to 50)<br />
-                <span className="text-xs text-slate-600">Budget: reference {fmtInr(r.reference_spend)} + bets {fmtInr(r.bets_spend)} + reserve {fmtInr(r.reserve)} = {fmtInr(r.reference_spend + r.bets_spend + r.reserve)} {r.budget_sums_to_cap ? '= cap ✓' : `≠ cap ${fmtInr(r.cap)}`}</span></div>); })}
+                <span className="text-xs text-slate-600">Budget: reference {fmtInr(r.reference_spend)} + bets {fmtInr(r.bets_spend)} + reserve {fmtInr(r.reserve)} = {fmtInr(r.reference_spend + r.bets_spend + r.reserve)} {r.budget_sums_to_cap ? `= cap ${fmtInr(r.cap)} ✓ (reserve ≥ 0)` : `≠ cap ${fmtInr(r.cap)}`}</span>{r.warnings.map((w, i) => <div key={i} className="text-xs text-red-700" role="alert">⚠ {w}</div>)}{r.warnings.length === 0 && <div className="text-xs text-emerald-700">✓ reach ≤ pool · identified ≤ reach · reminders ≤ confirmed · day split reconciles{r.day_split_gap ? ` (±${Math.abs(r.day_split_gap)} rounding)` : ''}</div>}</div>); })}
           </div>
           <div className="rounded border p-3 text-sm" data-testid="sensitivity">
             <div className="mb-1 text-xs font-medium text-slate-600">Sensitivity</div>

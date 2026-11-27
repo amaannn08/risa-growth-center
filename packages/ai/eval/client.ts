@@ -4,9 +4,14 @@ export interface Turn { text: string; tools: ToolCall[]; error?: string; ms: num
 
 export async function ask(baseUrl: string, messages: any[], context: Record<string, unknown> = {}, conversationId = 'eval'): Promise<Turn> {
   const t0 = Date.now();
-  const res = await fetch(`${baseUrl}/api/chat`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ messages, context, conversationId }) });
-  if (!res.ok) return { text: '', tools: [], error: `HTTP ${res.status} ${(await res.text()).slice(0, 200)}`, ms: Date.now() - t0, parts: [] };
-  const body = await res.text();
+  let body: string;
+  try {
+    const res = await fetch(`${baseUrl}/api/chat`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ messages, context, conversationId }) });
+    if (!res.ok) return { text: '', tools: [], error: `HTTP ${res.status} ${(await res.text()).slice(0, 200)}`, ms: Date.now() - t0, parts: [] };
+    body = await res.text();
+  } catch (e: any) { // transport failure (e.g. provider/connection dropped mid-stream): report as a retryable error instead of crashing the run
+    return { text: '', tools: [], error: `HTTP 599 transport: ${String(e?.cause?.message ?? e?.message ?? e).slice(0, 120)}`, ms: Date.now() - t0, parts: [] };
+  }
   let text = ''; const tools = new Map<string, ToolCall>(); let error: string | undefined;
   for (const line of body.split('\n')) {
     if (!line.startsWith('data:')) continue;

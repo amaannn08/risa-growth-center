@@ -28,9 +28,18 @@ export interface ScenarioResult {
   capacity: { day1: number; day2: number; repeat: number; weekend_unique: number; cap_weekend: number; cap_per_day: number;
     exceeds_weekend_cap: boolean; exceeds_day_cap: boolean; scans_per_hour: number };
 }
+/** Constraint checks that bind the plan to its inputs (not tautologies): every flag can fail when an assumption is edited. */
+export interface Reconciliation {
+  raw_total: number; headline: number; reference_spend: number; bets_spend: number; reserve: number; cap: number;
+  /** reference + bets + reserve = cap AND the reserve is not negative (i.e. spend ≤ cap) */ budget_sums_to_cap: boolean;
+  reserve_nonnegative: boolean; reach_within_pool: boolean; identified_within_reach: boolean;
+  /** B4 treated ≤ confirmed registrants (reminders can only go to opted-in confirmed people) */ reminders_within_confirmed: boolean;
+  /** raw total − (day1 + day2 − repeat): visitors the day split leaves unallocated (rounding if |gap| ≤ 1) */ day_split_gap: number; day_split_reconciles: boolean;
+  warnings: string[];
+}
 export interface StrategyModel {
   base: ScenarioResult; stretch: ScenarioResult;
-  reconciliation: Record<Scenario, { raw_total: number; headline: number; reference_spend: number; bets_spend: number; reserve: number; cap: number; budget_sums_to_cap: boolean }>;
+  reconciliation: Record<Scenario, Reconciliation>;
   sensitivity: Record<Scenario, { no_reminders_no_walkins: number; showup_drop_pp: number; showup_drop_visitors: number }>;
   growth_vs_2025: Record<Scenario, number>;
 }
@@ -106,10 +115,26 @@ export function strategyModel(
   const v2025 = opts.visitors2025 ?? 2050;
   const base = scenarioResult(assumptions, 'base', history, plan, v2025);
   const stretch = scenarioResult(assumptions, 'stretch', history, plan, v2025);
-  const rec = (r: ScenarioResult) => ({
-    raw_total: r.total, headline: r.headline, reference_spend: r.reference.spend, bets_spend: r.bets_spend, reserve: r.reserve, cap: r.cap,
-    budget_sums_to_cap: r.reference.spend + r.bets_spend + r.reserve === r.cap,
-  });
+  const rec = (r: ScenarioResult): Reconciliation => {
+    const treated = lookup(assumptions, 'b4_treated', r.scenario);
+    const gap = r.total - r.capacity.weekend_unique;
+    const flags = {
+      reserve_nonnegative: r.reserve >= 0,
+      budget_sums_to_cap: r.reserve >= 0 && r.reference.spend + r.bets_spend + r.reserve === r.cap,
+      reach_within_pool: r.reach.reached <= r.reach.pool,
+      identified_within_reach: r.reach.identified <= r.reach.reached,
+      reminders_within_confirmed: treated <= r.confirmed,
+      day_split_reconciles: Math.abs(gap) <= 1,
+    };
+    const warnings = [
+      !flags.reserve_nonnegative && `Spend ₹${r.spend.toLocaleString('en-US')} exceeds the ₹${r.cap.toLocaleString('en-US')} cap (reserve ${r.reserve < 0 ? '−' : ''}₹${Math.abs(r.reserve).toLocaleString('en-US')}).`,
+      !flags.reach_within_pool && `Assumed deduplicated reach ${r.reach.reached.toLocaleString('en-US')} exceeds the working pool ${r.reach.pool.toLocaleString('en-US')}.`,
+      !flags.identified_within_reach && `Identified people ${r.reach.identified.toLocaleString('en-US')} exceed reach ${r.reach.reached.toLocaleString('en-US')}.`,
+      !flags.reminders_within_confirmed && `B4 treats ${treated.toLocaleString('en-US')} people but only ${r.confirmed.toLocaleString('en-US')} are confirmed registrants.`,
+      !flags.day_split_reconciles && `Day split (${r.capacity.day1} + ${r.capacity.day2} − ${r.capacity.repeat} = ${r.capacity.weekend_unique}) differs from the modeled total ${r.total} by ${gap}.`,
+    ].filter((w): w is string => !!w);
+    return { raw_total: r.total, headline: r.headline, reference_spend: r.reference.spend, bets_spend: r.bets_spend, reserve: r.reserve, cap: r.cap, ...flags, day_split_gap: gap, warnings };
+  };
   const sens = (r: ScenarioResult, s: Scenario) => ({
     no_reminders_no_walkins: r.total - r.reminder_visitors - r.walkins,
     showup_drop_pp: lookup(assumptions, 'showup_drop_pp', s),

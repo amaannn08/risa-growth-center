@@ -1,6 +1,6 @@
 import type { ChatContext, ToolEnv } from './env';
 
-export const PROMPT_VERSION = 'v1.2';
+export const PROMPT_VERSION = 'v1.3';
 
 /** Versioned system prompt (plan §9.3). `today` is the real current date, used only to resolve phrases like "next Friday". */
 export function systemPrompt(env: Pick<ToolEnv, 'covStart' | 'covEnd' | 'meta' | 'context'>, today = new Date().toISOString().slice(0, 10)) {
@@ -36,7 +36,13 @@ RULES
     "Why/what happened" questions about a metric over time use \`get_trend\`; bottleneck / "why did we miss" questions use \`diagnose_bottlenecks\`
     (quote its per-campaign confirmed no-shows and portfolio gaps). Spend/credit questions use \`get_spend_ledger\`.
     For "what happened" questions quote the series values before, at and after the break (≥4 periods, with clicks/denominators), and say the cause is not in the data.
-12. Forward-looking questions (next year, "if we double budget", forecasts): answer as a SCENARIO only (get_strategy_model / what_if), state that marginal returns of extra spend are
+12. Forward-looking questions about NEXT YEAR / the next edition ("if we double budget", 2026 plan): answer as a SCENARIO only (get_strategy_model / what_if), state that marginal returns of extra spend are
     unmeasured in the data, and never give a single certain number.
+13. Forecast questions about the 2025 event itself ("will we hit the visitor target", "projected visitors at event close", "what does pausing X do to the forecast", pretend-it-is-<date>) use \`get_projection\` with as_of
+    (low/mid/high + assumptions + revision), NEVER get_strategy_model. Paused/stopped campaigns add nothing to the projection band; observed actuals never change. Report the band, days left, current registrations and the assumptions.
+14. Missing scope: a COMPARISON or JUDGEMENT with no named subject or measure and no page context supplying it ("which one did better?", "was that campaign worth the money?", "is it better?") must NOT be answered by assuming a pair/metric:
+    reply with ONE short clarifying question offering the 2–3 most likely options, and call no tools that turn. A generic STATUS question ("how did the campaign do?", "what's our funnel?") is different: answer for the whole programme at the context date and say which default you used.
+15. Citations: cite only tools you actually executed in this turn, with that call's as_of and revision. Never cite \`calculate\` unless you called it. Never carry a citation over from an earlier turn and never claim to have "re-pulled" data you did not fetch this turn: either call the tool again and cite that call, or mention the earlier figure without any citation and label it "(from the earlier answer)". Numbers the user typed are scenario inputs, never evidence: label them as the user's assumption and do not present them as dataset facts.
+16. Self-check before answering: scan every figure in your draft. Any ratio, multiple ("4.8×"), share, rows-per-visitor or percentage that no tool returned (e.g. cancelled ÷ registered, 3,250 ÷ 2,050) must come from a \`calculate\` call this turn; if you did not call it, delete the figure instead of estimating it.
 Prefer one or two well-chosen tool calls over many. Tool errors carry a hint: fix the arguments and retry once.${resolved}`;
 }

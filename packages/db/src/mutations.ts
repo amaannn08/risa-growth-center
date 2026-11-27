@@ -1,6 +1,12 @@
 import { z } from 'zod';
+import { adjudicateExperiment, normalizeEvidence } from '@gc/core';
 import type { Db, Q } from './client';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { nextUserN } from './ids';
+
+/** Per-request client id (hashed IP) recorded on every audit row written inside `withClient`. */
+export const clientStore = new AsyncLocalStorage<string>();
+export const withClient = <R>(clientId: string | undefined, fn: () => Promise<R>): Promise<R> => (clientId ? clientStore.run(clientId, fn) : fn());
 
 export type Actor = 'user' | 'copilot_confirmed' | 'system';
 export class MutationError extends Error {
@@ -29,7 +35,7 @@ const dateIn = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'expected YYYY-MM-DD');
 const nonNeg = z.number().int().min(0).max(100_000_000);
 const MAX = (n: number) => z.string().max(n);
 
-const jsonCols = new Set(['evidence', 'guardrails', 'params', 'payload', 'before', 'after']);
+const jsonCols = new Set(['evidence', 'guardrails', 'observation', 'params', 'payload', 'before', 'after']);
 const prep = (k: string, v: unknown) => (jsonCols.has(k) && v !== null && v !== undefined ? JSON.stringify(v) : v);
 
 async function insertRow(q: Q, table: string, obj: Record<string, unknown>) {
@@ -59,8 +65,8 @@ async function audited(q: Q, actor: Actor, entity: string, action: 'create' | 'u
   }
   const [m] = await q.query<{ data_revision: number }>(
     `UPDATE app_meta SET data_revision=data_revision+1, dataset_revision=dataset_revision+$1::int, edits_since_reset=edits_since_reset+1 WHERE id=1 RETURNING data_revision`, [ch.dataset ? 1 : 0]);
-  await q.query(`INSERT INTO audit_log(actor, entity, entity_id, action, before, after, data_revision) VALUES ($1::actor,$2,$3,$4::audit_action,$5::text::jsonb,$6::text::jsonb,$7)`,
-    [actor, entity, ch.id, action, ch.before == null ? null : JSON.stringify(ch.before), ch.after == null ? null : JSON.stringify(ch.after), m!.data_revision]);
+  await q.query(`INSERT INTO audit_log(actor, entity, entity_id, action, before, after, data_revision, client_id) VALUES ($1::actor,$2,$3,$4::audit_action,$5::text::jsonb,$6::text::jsonb,$7,$8)`,
+    [actor, entity, ch.id, action, ch.before == null ? null : JSON.stringify(ch.before), ch.after == null ? null : JSON.stringify(ch.after), m!.data_revision, clientStore.getStore() ?? null]);
   return { ok: true, data_revision: m!.data_revision, entity, id: ch.id, row: ch.after, result_ref: ch.result_ref };
 }
 const run = (db: Db, actor: Actor, entity: string, action: 'create' | 'update' | 'delete', fn: (q: Q) => Promise<Change>) =>
@@ -284,7 +290,7 @@ export const deleteCampaign = (db: Db, campaign_id: string, actor: Actor = 'user
 const taskBase = z.object({
   title: MAX(200).min(1), description: MAX(2000).nullish(), campaign_id: z.string().nullish(), owner_id: z.string().nullish(), due_date: dateIn.nullish(),
   status: z.enum(['todo', 'in_progress', 'blocked', 'done']).default('todo'), priority: z.enum(['p0', 'p1', 'p2']).default('p1'),
-  experiment_id: z.number().int().nullish(), bet_id: z.string().nullish(), insight_id: MAX(200).nullish(), evidence: z.any().nullish(),
+  experiment_id: z.number().int().nullish(), bet_id: z.string().nullish(), insight_id: MAX(200).nullish(), evidence: z.any().nullish().transform((e) => normalizeEvidence(e)),
   created_via: z.enum(['manual', 'insight', 'copilot']).default('manual'),
 });
 export type TaskInput = z.input<typeof taskBase>;
@@ -343,13 +349,24 @@ export const updateExperiment = (db: Db, id: number, patch: unknown, actor: Acto
     return { id: String(id), before, after };
   });
 };
-const readoutIn = z.object({ observed_value: z.number(), observed_n: z.number().int().min(0).nullish(), decision: z.enum(['scale', 'change', 'stop', 'insufficient_sample']) });
+const numRec = z.record(z.number().finite().nullable()).optional();
+/** The client's `decision` (if any) is ignored: the server adjudicates inside the write transaction. */
+const readoutIn = z.object({
+  observed_value: z.number().finite().nullish(), observed_n: z.number().int().min(0).nullish(), kpi_numerator: z.number().finite().nullish(), kpi_denominator: z.number().finite().nullish(),
+  guardrail_observations: numRec, gate_inputs: numRec,
+}).passthrough();
 async function readoutTx(q: Q, id: number, input: unknown): Promise<Change> {
   const v = parse(readoutIn, input);
   const before = await getOne(q, 'experiments', 'id', id);
   if (!before) bad('NOT_FOUND', `Experiment ${id} not found`);
-  const status = ({ scale: 'scaled', change: 'changed', stop: 'stopped', insufficient_sample: 'readout' } as const)[v.decision];
-  const after = await updateRow(q, 'experiments', { id }, { observed_value: v.observed_value, observed_n: v.observed_n ?? null, decision: v.decision, status });
+  const e = before as any;
+  let observed = v.observed_value ?? null;
+  if (observed === null && v.kpi_numerator != null && v.kpi_denominator != null && v.kpi_denominator > 0) observed = (e.kpi_unit === '%' ? 100 : 1) * v.kpi_numerator / v.kpi_denominator;
+  const ev = adjudicateExperiment({ ...e, scale_value: e.scale_value === null ? null : Number(e.scale_value), stop_value: e.stop_value === null ? null : Number(e.stop_value) },
+    { observed_value: observed, observed_n: v.observed_n, guardrail_observations: v.guardrail_observations, gate_inputs: v.gate_inputs });
+  const status = ({ scale: 'scaled', change: 'changed', stop: 'stopped', insufficient_sample: 'readout' } as const)[ev.decision];
+  const observation = { kpi_numerator: v.kpi_numerator ?? null, kpi_denominator: v.kpi_denominator ?? null, guardrail_observations: ev.guardrails.map((g) => ({ key: g.key, label: g.label, op: g.op, threshold: g.value, observed: g.observed, passed: g.passed, hard: !!g.hard })), gates: ev.gates, missing: ev.missing, reasons: ev.reasons };
+  const after = await updateRow(q, 'experiments', { id }, { observed_value: observed, observed_n: v.observed_n ?? null, decision: ev.decision, status, observation });
   return { id: String(id), before, after, result_ref: `experiment:${id}` };
 }
 export const recordReadout = (db: Db, id: number, input: unknown, actor: Actor = 'user') => run(db, actor, 'experiments', 'update', (q) => readoutTx(q, id, input));

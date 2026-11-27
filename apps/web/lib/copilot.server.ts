@@ -1,15 +1,13 @@
 import 'server-only';
-import { createHash } from 'node:crypto';
 import { createUIMessageStream, type UIMessageChunk } from 'ai';
-import type { Db } from '@gc/db';
+import { hit, type Db } from '@gc/db';
 import type { ToolLogEntry } from '@gc/ai';
 
-export const ipHash = (ip: string) => createHash('sha256').update(`gc:${ip}`).digest('hex').slice(0, 16);
 export const DAILY_CAP = Number(process.env.CHAT_DAILY_CAP ?? 1500);
 
+/** Atomically RESERVE one slot of the daily provider budget before any provider call (durable, shared across instances). True = over the cap. */
 export async function overDailyCap(db: Db) {
-  const [r] = await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM chat_logs WHERE at > now() - interval '1 day'`);
-  return (r?.n ?? 0) >= DAILY_CAP;
+  return !(await hit(db, 'chat:daily', DAILY_CAP, 86_400)).allowed;
 }
 
 export async function logChat(db: Db, row: { conversation_id?: string; ip_hash: string; question: string; tool_calls: ToolLogEntry[]; answer: string; grounding: unknown; model: string; latency_ms: number; error?: string }) {

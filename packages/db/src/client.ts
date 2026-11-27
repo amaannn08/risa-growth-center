@@ -45,7 +45,7 @@ export async function createDb(url?: string): Promise<Db> {
   }
   const { PGlite } = await import('@electric-sql/pglite');
   const spec = (u ?? 'pglite:memory').replace(/^pglite:/, '');
-  const pg = spec === 'memory' || spec === '' ? new PGlite() : new PGlite(resolve(process.cwd(), spec));
+  const pg = spec === 'memory' || spec === '' ? new PGlite() : new PGlite(resolve(REPO_ROOT, spec)) // relative paths resolve against the monorepo root, so CLI (packages/db) and Next (apps/web) share one file;
   await pg.waitReady;
   const wrap = (s: any): Q => ({ query: async (t, p) => (await s.query(t, p ?? [])).rows as any });
   let chain: Promise<unknown> = Promise.resolve();

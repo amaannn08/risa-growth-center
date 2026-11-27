@@ -128,6 +128,9 @@ test('(h) experiment readout → decision → follow-up task; campaign pause via
   await page.getByTestId('readout-3').click();
   await page.getByLabel('observed value').fill('17');
   await page.getByLabel('observed n').fill('250');
+  await expect(page.getByTestId('readout-decision')).toContainText('Insufficient evidence'); // guardrail observations are mandatory
+  await page.getByLabel('guardrail abuse_pct').fill('2');
+  await page.getByLabel('guardrail visitor_cost_inr').fill('120');
   await expect(page.getByTestId('readout-decision')).toContainText('Scale');
   await page.getByTestId('readout-save').click();
   await page.getByTestId('readout-followup').click();

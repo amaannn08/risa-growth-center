@@ -5,3 +5,4 @@ export * from './seed';
 export * from './reset';
 export * from './verify';
 export * from './ids';
+export * from './rateLimit';

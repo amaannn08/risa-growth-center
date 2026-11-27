@@ -418,8 +418,24 @@ export const TOOLS: ToolSpec[] = [
     },
   },
   {
+    name: 'get_projection',
+    description: 'HISTORICAL event-end forecast shown on the Overview page: low/mid/high projected unique verified visitors (and registrations) at event close, computed as of a past date from active campaigns\' trailing 7/14/28-day registration rates × show-up assumptions + walk-ins, with current registrations, days left, per-campaign status (paused/stopped campaigns add nothing) and assumptions. Use for "will we hit / what is the forecast / projected visitors for the event" and for "what does pausing X do to the forecast". Observed actuals are never changed. NOT the next-edition plan (use get_strategy_model for that).',
+    schema: z.object({ as_of: AsOf }),
+    run: (env, a) => {
+      const asOf = resolveAsOf(env, a.as_of);
+      const p = projectVisitors(env.ds, asOf, env.assumptions);
+      return {
+        ...meta(env, 'get_projection', asOf, { visitors: 'unique verified visitors', registrations: 'unique registered people' }),
+        label: p.label, mode: p.mode, rate_windows_days: [7, 14, 28], days_left: p.days_left, current_registered: p.current_registered,
+        visitors: p.visitors, registrations: p.registrations, campaigns: p.campaigns, assumptions: p.assumptions,
+        active_campaigns: p.campaigns.filter((c) => c.status !== 'paused' && c.status !== 'stopped').map((c) => c.campaign_id),
+        note: p.mode === 'actual' ? 'The event has ended: projection equals the observed actual.' : 'Forecast for the dataset\'s historical event (2025), an ASSUMPTION-based band; not evidence and not the 2026 plan.',
+      };
+    },
+  },
+  {
     name: 'get_strategy_model',
-    description: 'Next-edition strategy model (base 2,400 / stretch 2,850): reference carry-forward, five ranked bets with formulas and visitors, registrations → confirmed → registered visitors → walk-ins → total, spend/reserve vs cap, CPA, sensitivity and capacity, with every assumption tagged S (sourced) / A (assumption) / D (dataset). This is a PLAN, not evidence.',
+    description: 'NEXT-EDITION (2026) planning only: strategy model (base 2,400 / stretch 2,850): reference carry-forward, five ranked bets with formulas and visitors, registrations → confirmed → registered visitors → walk-ins → total, spend/reserve vs cap, CPA, sensitivity and capacity, with every assumption tagged S (sourced) / A (assumption) / D (dataset). This is a PLAN, not evidence.',
     schema: z.object({ scenario: z.enum(['base', 'stretch', 'both']).optional() }),
     run: async (env, a) => {
       const m = liveStrategy(env);

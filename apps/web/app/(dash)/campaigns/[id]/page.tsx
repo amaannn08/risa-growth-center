@@ -1,5 +1,5 @@
 import { notFound } from 'next/navigation';
-import { fmtInr, fmtInt, fmtPct, istDate, recommendCampaigns, showUpByRegistrationWeek, snapshot, weeklySeries } from '@gc/core';
+import { fmtInr, fmtInt, fmtPct, istDate, recommendCampaigns, showUpByRegistrationWeek, snapshot, weekIsRunning, weeklySeries } from '@gc/core';
 import { getCtx, type SP } from '@/lib/data';
 import { PageTitle, Panel, td, tdr, th, thr } from '@/components/kit';
 import { Funnel } from '@/components/Funnel';
@@ -21,9 +21,10 @@ export default async function CampaignDetail({ params, searchParams }: { params:
   const f = snap.campaigns![id]!.first_touch;
   const rec = recommendCampaigns(ds, asOf, rules).find((r) => r.campaign_id === id);
   const started = asOf >= istDate(ds.eventMs.startsAt);
-  const weeks = weeklySeries(ds).filter((w) => w.through <= asOf || w.from <= asOf).map((w) => {
+  // clipped at the as-of date: the running week only carries what was posted by EOD asOf (never future data) and is marked partial
+  const weeks = weeklySeries(ds, asOf).filter((w) => w.from <= asOf).map((w) => {
     const p = w.campaigns[id]!.first_touch.period_increment;
-    return { week: w.from.slice(5), registrations: p.registered_people, clicks: p.clicks, spend: p.marketing_spend_inr };
+    return { week: w.from.slice(5), registrations: p.registered_people, clicks: p.clicks, spend: p.marketing_spend_inr, partial: weekIsRunning(w), through: w.through };
   });
   const cohorts = showUpByRegistrationWeek(ds, asOf, id);
   const tasks = await ctx.db.query<any>(`SELECT t.id, t.title, t.status::text AS status, t.priority::text AS priority, t.due_date::text AS due_date, t.experiment_id FROM tasks t WHERE t.campaign_id=$1 ORDER BY t.id`, [id]);
@@ -44,10 +45,10 @@ export default async function CampaignDetail({ params, searchParams }: { params:
           platform={[{ label: 'Reported reach', value: f.reported_reach_sum_nonunique }, { label: 'Impressions', value: f.impressions }, { label: 'Clicks', value: f.clicks }, { label: 'Landing sessions', value: f.landing_page_sessions }, { label: 'Registration starts', value: f.registration_starts }]}
           people={[{ label: 'Identified', value: f.identified_external_people }, { label: 'Engaged', value: f.engaged_people }, { label: 'Registered', value: f.registered_people }, { label: 'Confirmed', value: f.confirmed_people }, { label: 'Verified visitors', value: f.attended_people }]} />
       </Panel>
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Panel title="Weekly registrations, clicks, spend" tag="D" right="weeks start Monday; first week partial">
+      <div className="grid gap-4 lg:grid-cols-2 [&>*]:min-w-0">
+        <Panel title="Weekly registrations, clicks, spend" tag="D" right="weeks start Monday; * = partial (first week, or still running at the as-of date)">
           <WeeklyBars data={weeks} bars={[{ key: 'registrations', label: 'Registrations', color: colorOf(id) }, { key: 'clicks', label: 'Clicks', color: '#94a3b8' }]} />
-          <table className="mt-2 w-full text-xs"><tbody><tr>{weeks.map((w) => <td key={w.week} className="px-1 text-right text-slate-500" title={`spend ₹${w.spend}`}>₹{Math.round(w.spend / 100) / 10}k</td>)}</tr></tbody></table>
+          <div className="mt-2 overflow-x-auto"><table className="w-full text-xs" data-testid="week-spend"><thead><tr>{weeks.map((w) => <th key={w.week} className="px-1 text-right font-normal text-slate-400">{w.week}{w.partial ? '*' : ''}</th>)}</tr></thead><tbody><tr>{weeks.map((w) => <td key={w.week} data-testid={`week-spend-${w.week}`} data-partial={w.partial ? 'true' : 'false'} className="px-1 text-right text-slate-500" title={`net spend ₹${w.spend}${w.partial ? ` posted through ${w.through} (week still running)` : ''}`}>{w.spend === 0 ? '₹0' : `₹${Math.round(w.spend / 100) / 10}k`}{w.partial ? ' · partial' : ''}</td>)}</tr></tbody></table></div>
         </Panel>
         <Panel title="Status mix (latest per person)" tag="D">
           <ul className="space-y-1 text-sm">{(['confirmed', 'interested', 'cancelled', 'waitlisted'] as const).map((s) => <li key={s} className="flex justify-between"><span>{s}</span><b className="tabular-nums">{fmtInt(st[s])}</b></li>)}</ul>
@@ -56,7 +57,7 @@ export default async function CampaignDetail({ params, searchParams }: { params:
             <tbody>{cohorts.map((c) => <tr key={c.week_start} className="border-t"><td className={td}>{c.week_start}</td><td className={tdr}>{c.registered}</td><td className={tdr}>{c.confirmed_now}</td><td className={tdr}>{c.attended}</td><td className={tdr}>{started ? fmtPct(c.show_up, 1) : '—'}</td></tr>)}</tbody></table>
         </Panel>
       </div>
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="grid gap-4 lg:grid-cols-2 [&>*]:min-w-0">
         <Panel title="Tasks for this campaign">
           {tasks.length ? <ul className="space-y-1 text-sm">{tasks.map((t) => <li key={t.id}>#{t.id} {t.title} <span className="text-xs text-slate-500">· {t.status} · {t.priority}{t.due_date ? ` · due ${t.due_date}` : ''}</span></li>)}</ul> : <p className="text-sm text-slate-500">No tasks yet. Create one from a Diagnose finding.</p>}
           <p className="mt-2 text-xs text-slate-500">Experiments link to bets, not campaigns; see Execution for the board.</p>

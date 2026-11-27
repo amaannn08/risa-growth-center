@@ -6,12 +6,12 @@ dist
 .env.*
 !.env.example
 *.local
-.pglite
+.pglite*
 coverage
 playwright-report
 test-results
 .DS_Store
-.pglite
+.pglite*
 .pglite*
 .vercel
 .env*

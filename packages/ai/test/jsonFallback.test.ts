@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { createDb, seedDb } from '@gc/db';
+import { createDb, hit, seedDb } from '@gc/db';
 import { makeEnv, parseStep, runJsonLoop, type ToolLogEntry } from '../src';
-import { allow } from '../../../apps/web/lib/rateLimit';
 
 describe('json fallback parser', () => {
   it('parses tool calls and finals, tolerates fences/prose, rejects junk', () => {
@@ -22,11 +21,21 @@ describe('json fallback parser', () => {
   });
 });
 
-describe('rate limiter', () => {
-  it('sliding window: allows N then blocks, then frees after the window', () => {
-    const k = 'k' + Math.random(), t0 = 1_000_000;
-    for (let i = 0; i < 20; i++) expect(allow(k, 20, 600_000, t0 + i)).toBe(true);
-    expect(allow(k, 20, 600_000, t0 + 100)).toBe(false);
-    expect(allow(k, 20, 600_000, t0 + 600_001)).toBe(true);
+describe('durable rate limiter (Postgres fixed window, atomic upsert)', () => {
+  it('allows N, blocks the rest, is atomic under concurrency, and frees after expiry', async () => {
+    const db = await createDb('pglite:memory'); await seedDb(db);
+    const r = await Promise.all(Array.from({ length: 12 }, () => hit(db, 'chat:t', 5, 600)));
+    expect(r.filter((x) => x.allowed)).toHaveLength(5);
+    expect((await hit(db, 'chat:t', 5, 600)).allowed).toBe(false);
+    expect((await hit(db, 'chat:other', 5, 600)).allowed).toBe(true); // keys are independent
+    await db.query(`UPDATE rate_counters SET expires_at = now() - interval '1 second' WHERE key='chat:t'`);
+    expect(await hit(db, 'chat:t', 5, 600)).toMatchObject({ allowed: true, count: 1 });
+    await db.close();
+  });
+  it('daily provider-budget reservation counts the request BEFORE the provider call', async () => {
+    const db = await createDb('pglite:memory'); await seedDb(db);
+    expect((await hit(db, 'chat:daily', 1, 86400)).allowed).toBe(true);
+    expect((await hit(db, 'chat:daily', 1, 86400)).allowed).toBe(false);
+    await db.close();
   });
 });

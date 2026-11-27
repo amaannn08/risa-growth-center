@@ -29,6 +29,11 @@ describe('grounding extractor', () => {
     expect(g.ok).toBe(true); expect(g.derived).toEqual(['750']);
     const c = groundingCheck('Show-up 68.75%, so 31.25% did not attend', out); expect(c.ok).toBe(true); expect(c.derived).toEqual(['31.25%']);
     expect(groundingCheck('gap of 9,999 and visitors 2,050', out).ok).toBe(false);
+    // ratios/shares of two traced figures are exact arithmetic: allowed as derived, but only when written with decimals or as a %
+    const r = groundingCheck('Visitors 2,050 of 2,800 registered; that is 1.37 per visitor and 73.21% overall', out);
+    expect(r.unmatched).toEqual([]); expect(r.derived).toContain('1.37'); // 2,800 / 2,050 = 1.366 → 1.37 is a ratio of traced figures
+    const r2 = groundingCheck('Visitors 2,050 and registered 2,800, so 2,050 / 2,800 is 73.21%; 41.2% is made up', out);
+    expect(r2.unmatched).toEqual(['41.2%']);
   });
 });
 

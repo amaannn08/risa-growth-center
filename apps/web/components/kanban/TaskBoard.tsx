@@ -5,8 +5,9 @@ import { mutate } from '@/lib/mutate';
 import { FormButton, type FormSpec } from '@/components/forms/GenericForm';
 import { DeleteButton } from '@/components/DeleteButton';
 import { colorOf } from '@/lib/ui';
+import { evidenceLabel, normalizeEvidence } from '@gc/core';
 
-export interface TaskRow { id: number; title: string; description: string | null; campaign_id: string | null; owner_id: string | null; due_date: string | null; status: string; priority: string; experiment_id: number | null; bet_id: string | null; insight_id: string | null; evidence: { tool: string; metric: string; value: string | number }[] | null; created_via: string }
+export interface TaskRow { id: number; title: string; description: string | null; campaign_id: string | null; owner_id: string | null; due_date: string | null; status: string; priority: string; experiment_id: number | null; bet_id: string | null; insight_id: string | null; evidence: unknown; created_via: string }
 interface Opt { value: string; label: string }
 const COLS = [['todo', 'To do'], ['in_progress', 'In progress'], ['blocked', 'Blocked'], ['done', 'Done']] as const;
 const PRI: Record<string, string> = { p0: 'bg-red-100 text-red-800', p1: 'bg-amber-100 text-amber-800', p2: 'bg-slate-100 text-slate-700' };
@@ -62,11 +63,15 @@ export function TaskBoard({ tasks, campaigns, owners, bets, experiments, today }
                       {t.bet_id && <span className="rounded bg-slate-200 px-1">{t.bet_id}</span>}
                       {t.experiment_id && <span className="rounded bg-slate-200 px-1">EXP-{t.experiment_id}</span>}
                     </div>
-                    {t.insight_id && (
-                      <details className="mt-1 text-[11px]"><summary className="cursor-pointer rounded bg-sky-50 px-1 text-sky-800" data-testid="evidence-chip">evidence · {t.insight_id.split(':')[0]}{t.created_via === 'copilot' ? ' · via Copilot' : ''}</summary>
-                        <div className="mt-1 text-slate-600">{t.insight_id}{(t.evidence ?? []).map((e, i) => <div key={i}>{e.metric}: {String(e.value)}</div>)}</div></details>
-                    )}
-                    {!t.insight_id && t.evidence && t.evidence.length > 0 && <div className="mt-1 rounded bg-sky-50 px-1 text-[11px] text-sky-800" data-testid="evidence-chip">evidence · {t.evidence.map((e) => `${e.metric}: ${e.value}`).join('; ')}</div>}
+                    {(() => {
+                      const ev = normalizeEvidence(t.evidence);
+                      if (!t.insight_id && !ev) return null;
+                      const via = t.created_via === 'copilot' ? ' · via Copilot' : '';
+                      return (
+                        <details className="mt-1 text-[11px]"><summary className="cursor-pointer rounded bg-sky-50 px-1 text-sky-800" data-testid="evidence-chip">evidence · {t.insight_id ? t.insight_id.split(':')[0] : ev!.items.map((e) => `${e.metric}: ${e.value}`).join('; ')}{via}</summary>
+                          <div className="mt-1 text-slate-600" data-testid="evidence-detail">{t.insight_id}{ev && <div>{evidenceLabel(ev)}</div>}</div></details>
+                      );
+                    })()}
                     <div className="mt-2 flex items-center gap-1">
                       <select aria-label={`Status of task ${t.id}`} value={t.status} onChange={(e) => move(t, e.target.value)} className="h-6 rounded border px-1 text-xs">{COLS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
                       <FormButton spec={taskSpec(t, campaigns, owners, bets, experiments)} label="Edit" className="rounded border px-1.5 py-0.5 text-xs hover:bg-slate-100" />
