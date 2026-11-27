@@ -63,9 +63,9 @@ describe('strategy constraints are real checks (not tautologies)', () => {
     const s = strategyModel().reconciliation.stretch;
     expect(s.reminders_feasible).toBe(true); expect([s.reminder.optin_rate, s.reminder.holdout_share, s.reminder.target, s.reminder.treated]).toEqual([0.9, 0.2, 2229, 2229]);
     expect(s.reminder.eligible_optin).toBe(2787); expect(s.reminder.holdout).toBe(2787 - 2229);
-    // two-wave cadence closes the visitor gap through visits per person, not the treated count: 2,229 × (5.8 + 0.7) pp = 145
-    expect([s.reminder.waves, s.reminder.lift_pp, strategyModel().stretch.reminder_visitors]).toEqual([2, 6.5, 145]); expect(s.reminder.treated).toBeLessThanOrEqual(s.reminder.eligible_optin);
-    expect([s.reminders_within_confirmed, s.day_split_reconciles, s.raw_total, s.headline]).toEqual([true, true, 2850, 2850]);
+    // Only the day-of arm (1,114 of 2,229 treated) receives the day-of increment.
+    expect([s.reminder.waves, s.reminder.day_of_treated, strategyModel().stretch.reminder_visitors]).toEqual([2, 1114, 137]); expect(s.reminder.treated).toBeLessThanOrEqual(s.reminder.eligible_optin);
+    expect([s.reminders_within_confirmed, s.day_split_reconciles, s.raw_total, s.headline]).toEqual([true, true, 2842, 2800]);
     expect(strategyModel().reconciliation.base.reminder.waves).toBe(1);
   });
   it('a day split that no longer reconciles to the raw total is flagged', () => {

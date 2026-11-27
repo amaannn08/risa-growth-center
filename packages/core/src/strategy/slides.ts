@@ -36,7 +36,7 @@ export function slideContent(m: StrategyModel, i: SlideInputs = {}) {
         ['Confirmed', fmtInt(b.confirmed), fmtInt(s.confirmed)],
         ['Registered visitors', fmtInt(b.registered_visitors), fmtInt(s.registered_visitors)],
         ['+ walk-ins', fmtInt(b.walkins), fmtInt(s.walkins)],
-        ['Unique verified visitors', `${fmtInt(b.total)} ≈ ${fmtInt(b.headline)}`, fmtInt(s.headline)],
+        ['Unique verified visitors', `${fmtInt(b.total)} ≈ ${fmtInt(b.headline)}`, `${fmtInt(s.total)} ≈ ${fmtInt(s.headline)}`],
         ['Net spend / reserve', `${fmtInr(b.spend)} / ${fmtInr(b.reserve)}`, `${fmtInr(s.spend)} / ${fmtInr(s.reserve)}`],
         ['CPA reg / visitor', `${fmtInr(b.cpa.registration)} / ${fmtInr(b.cpa.visitor)}`, `${fmtInr(s.cpa.registration)} / ${fmtInr(s.cpa.visitor)}`],
       ] as [string, string, string][],
@@ -44,7 +44,7 @@ export function slideContent(m: StrategyModel, i: SlideInputs = {}) {
       believe: [
         `Built bottom-up from the 2025 cohort (D): ${fmtInt(v25)} visitors, ${(showUp25 * 100).toFixed(2)}% registered show-up, ${fmtInr(Math.round(spend25 / v25))}/visitor.`,
         `Reference keeps proven channels (${fmtInr(refTotals.spend)} → ${fmtInt(refTotals.visitors)} registered visitors); five bets add ${fmtInt(b.acquisition_visitors)}–${fmtInt(s.acquisition_visitors)} + reminders ${fmtInt(b.reminder_visitors)}–${fmtInt(s.reminder_visitors)}.`,
-        `ASSUMPTION (reminders): treated ≤ ⌊⌊confirmed × ${Math.round(s.reminder.optin_rate * 100)}% opt-in⌋ × (1 − ${Math.round(s.reminder.holdout_share * 100)}% holdout)⌋ = ${fmtInt(s.reminder.treated)} (of ${fmtInt(s.reminder.eligible_optin)} eligible). Groups: holdout (no messages) · pre-event only (T−7, T−2) · pre-event + day-of (T−7, T−2, event morning). Stretch adds the day-of message (pre-event ${s.reminder.wave1_pp} pp + day-of ${s.reminder.wave2_pp} pp = ${Math.round(s.reminder.lift_pp * 10) / 10} pp per person; it raises visits per person, not the treated count). The holdout measures the combined effect; the +${s.reminder.wave2_pp} pp day-of increment is untested until pre-event + day-of is compared with pre-event only.`,
+        `ASSUMPTION (reminders): ${fmtInt(s.reminder.eligible_optin)} opt in, ${Math.round(s.reminder.holdout_share * 100)}% holdout (no messages), and ${fmtInt(s.reminder.treated)} treated. Both active arms get T−7 and T−2; the 50/50 stretch split sends an event-morning message to ${fmtInt(s.reminder.day_of_treated)}. Apply +${s.reminder.wave1_pp} pp to all treated and ${s.reminder.wave2_pp < 0 ? '−' : '+'}${Math.abs(s.reminder.wave2_pp)} pp only to the day-of arm. Compare the active arms to estimate the day-of increment.`,
         'Turnout benchmarks 64.7% (Vihaya) and ~72% free events (PheedLoop).',
         `Capacity ≤${fmtInt(b.capacity.cap_per_day)}/day · ≤${fmtInt(b.capacity.cap_weekend)} weekend · 4 QR lanes = ${fmtInt(b.capacity.scans_per_hour)} scans/h.`,
         `Downside ${fmtInt(m.sensitivity.base.no_reminders_no_walkins)} (no reminder lift, no walk-ins); −5 pp show-up = ${fmtInt(m.sensitivity.base.showup_drop_visitors)}.`,

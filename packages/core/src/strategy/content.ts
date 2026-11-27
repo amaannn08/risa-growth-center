@@ -1,3 +1,5 @@
+import { B5_QUALIFIED_CLICK_MINIMUM } from '../experiments';
+
 /** Static strategy content shared by slides, Strategy page, Copilot and README. Numbers come from model.ts, not from here. */
 export const BETS = [
   { id: 'B1', rank: 1, name: 'College group passes', impact: 5, confidence: 5, ease: 3, owner_id: 'T03', owner: 'Partnerships lead (Meera Iyer)', start_offset_weeks: 8, end_offset_weeks: 2,
@@ -42,7 +44,7 @@ export const EXPERIMENTS = [
     assignment_unit: 'person: stratified ~20% holdout, then treated randomised 50/50 to pre-event only vs pre-event + day-of', min_sample: 1750, scale_op: '>=', scale_value: 55, stop_op: '<', stop_value: 40,
     change_rule: '40–54.9%: change timing/copy', stop_note: 'or opt-out > 2%. Final metric = ITT verified show-up lift; scale next edition at ≥ 4 pp with interval', guardrails: [{ key: 'delivery_pct', label: 'delivery ≥ 90%', op: '>=', value: 90 }, { key: 'optout_pct', label: 'opt-out ≤ 2%', op: '<=', value: 2, hard: true }], risk: 'Template approval delay; opt-in volume', leading_signal: 'Reconfirm rate at T−2' },
   { bet_id: 'B5', name: 'Paid retargeting', hypothesis: 'Retargeted warm audiences register incrementally at an acceptable cost.', primary_kpi: 'Incremental reg/click at ≥400 qualified clicks; T−7 confirmation ≥85%', kpi_unit: '%',
-    assignment_unit: 'audience (holdout within geo)', min_sample: 400, scale_op: '>=', scale_value: 10, stop_op: '<', stop_value: 6,
+    assignment_unit: 'audience (holdout within geo)', min_sample: B5_QUALIFIED_CLICK_MINIMUM, scale_op: '>=', scale_value: 10, stop_op: '<', stop_value: 6,
     change_rule: '6–9.9%: rework', stop_note: 'or confirmation < 75%, or marginal visitor cost > ₹200. 2nd ₹6k only if forecast ≥ 40 more visitors at ≤ ₹150', guardrails: [{ key: 'confirmation_pct', label: 'T−7 confirmation ≥ 85%', op: '>=', value: 85, stop_op: '<', stop_value: 75 }, { key: 'marginal_visitor_cost_inr', label: 'marginal visitor cost ≤ ₹200', op: '<=', value: 200, hard: true }], risk: 'Landing-page quality', leading_signal: 'Incremental reg/click' },
 ] as const;
 

@@ -50,12 +50,24 @@ for (const item of ITEMS.filter((i) => !only || only.includes(i.id))) {
   // the SAME check the UI runs: only this turn's server-issued refs, claims bound to magnitude/unit/sign/scope; `last.text` is the final-step text the UI renders
   const g = groundingFromCalls(last.text, last.tools.map((t) => t.output?._evidence).filter(Boolean), texts);
   const toolsCalled = last.tools.map((t) => t.name);
-  const draftCreated = last.tools.some((t) => t.name === 'propose_task' && t.output?.draft_id);
-  const s = scoreAnswer(item, last.text, toolsCalled, g, draftCreated);
+  const draft = last.tools.find((t) => t.name === 'propose_task' && t.output?.draft_id);
+  const s = scoreAnswer(item, last.text, toolsCalled, g, Boolean(draft));
+  if (item.verifiedEvidence && draft) {
+    const confirmed: any = await post(`/api/drafts/${draft.output.draft_id}/confirm`, {});
+    const stored = confirmed.row?.evidence?.items;
+    const sources = last.tools.flatMap((t) => t.output?._evidence?.refs ?? []);
+    const verified = confirmed.ok && stored?.length === item.verifiedEvidence.length
+      && item.verifiedEvidence.every((expected) => stored.some((i: any) => i.verified && sources.some((r: any) =>
+        i.ref?.toolCallId === r.toolCallId && i.ref.metricField === r.metricField && i.ref.unit === r.unit && i.ref.revision === r.revision
+        && i.ref.signedValue === r.signedValue && i.ref.asOf === r.asOf && i.ref.scope === r.scope && i.ref.attribution === r.attribution
+        && r.metricField === expected.field && r.signedValue === expected.value && r.asOf === expected.asOf && r.scope === expected.scope
+        && r.attribution === expected.attribution && r.unit === 'count' && r.revision != null)));
+    if (!verified) { s.pass = false; s.notes.push('confirmed task is missing exact verified evidence'); }
+  }
   if (process.env.EVAL_DEBUG && !(s.pass && !last.error)) console.log(`  DEBUG #${item.id}\n  ${last.text.replace(/\n/g, '\n  ')}\n  MISMATCH ${JSON.stringify(g.claim_mismatches)} UNMATCHED ${JSON.stringify(g.unmatched)}`);
   rows.push({ id: item.id, q: item.q, kind: item.kind ?? 'normal', pass: s.pass && !last.error, tools: toolsCalled, missing: s.missing, forbidden: s.forbidden, grounding: [...g.unmatched, ...g.bad_citations, ...g.claim_mismatches.map((m) => `${m.raw} (${m.reason})`)], ms: last.ms, excerpt: last.text.replace(/\s+/g, ' ').slice(0, 260), err: last.error, notes: s.notes });
   console.log(`#${item.id} ${s.pass && !last.error ? 'PASS' : 'FAIL'}  ${toolsCalled.join(',')}  ${s.missing.length ? 'missing: ' + s.missing.join(' | ') : ''} ${g.unmatched.length ? 'ungrounded: ' + g.unmatched.join(',') : ''} ${g.claim_mismatches.length ? 'claim mismatch: ' + g.claim_mismatches.map((m) => m.raw).join(',') : ''} ${last.error ?? ''}`);
-  if (item.setup?.length) await reset();
+  if (item.setup?.length || item.verifiedEvidence) await reset();
 }
 await reset();
 

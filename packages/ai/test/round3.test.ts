@@ -125,8 +125,8 @@ describe('server-issued evidence refs (P1-3)', () => {
     const env = await makeEnv(db, { asOf: '2025-04-20' });
     await runTool(env, 'get_funnel', { as_of: '2025-04-12' });
     await runTool(env, 'get_funnel', { as_of: '2025-04-20' });
-    const same = buildEvidence([{ tool: 'get_funnel', metric: 'registered', value: 2800 }], env.calls)!;
-    expect(same.items[0]!.ref!.asOf).toBe('2025-04-20'); expect(same.as_of).toBe('2025-04-20'); // same figure in two runs → the latest run wins
+    const same = buildEvidence([{ tool: 'get_funnel', metric: 'registered', value: 2800, as_of: '2025-04-20' }], env.calls)!;
+    expect(same.items[0]!.ref!.asOf).toBe('2025-04-20'); expect(same.as_of).toBe('2025-04-20');
     const mixed = buildEvidence([{ tool: 'get_funnel', metric: 'registered_and_attended', value: 1350 }, { tool: 'get_funnel', metric: 'registered_and_attended', value: 1925 }], env.calls)!;
     expect(mixed.items.map((i) => i.ref?.asOf)).toEqual(['2025-04-12', '2025-04-20']); expect(mixed.as_of).toBeNull();
   });

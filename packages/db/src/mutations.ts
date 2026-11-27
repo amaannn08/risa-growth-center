@@ -442,7 +442,7 @@ export const confirmDraft = (db: Db, id: string, editedPayload?: Record<string, 
     const payload = { ...(d.payload as Record<string, unknown>), ...(editedPayload ?? {}) };
     let ch: Change, entity: string, action: 'create' | 'update' = 'create';
     if (d.kind === 'task') {
-      ch = await createTaskTx(q, { ...payload, created_via: 'copilot', evidence: payload.evidence ?? d.evidence }); entity = 'tasks';
+      ch = await createTaskTx(q, { ...payload, created_via: 'copilot', evidence: d.evidence }); entity = 'tasks';
     } else if (d.kind === 'campaign_update') {
       const { campaign_id, reason: _r, evidence: _e, ...patch } = payload as any;
       const v = parse(campBase.partial(), patch);

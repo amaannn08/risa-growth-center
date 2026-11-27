@@ -29,8 +29,13 @@ test('Diagnose at 3 Mar: running week is flagged partial; quality panel is label
 
 test('confirmed Copilot draft keeps its evidence chip (with date and revision) on the new board card', async ({ page }) => {
   await page.goto('/copilot');
-  await page.getByLabel('Ask the Copilot').fill('Draft a reminder task for me');
-  await page.getByRole('button', { name: 'Send' }).click();
+  const prompt = page.getByLabel('Ask the Copilot');
+  const send = page.getByRole('button', { name: 'Send' });
+  await expect(async () => {
+    await prompt.fill('Draft a reminder task for me');
+    await expect(send).toBeEnabled({ timeout: 1_000 });
+  }).toPass();
+  await send.click();
   const card = page.getByTestId('draft-card').last();
   await expect(card).toContainText('needs your confirmation');
   await card.getByRole('button', { name: 'Confirm' }).click();
@@ -41,9 +46,9 @@ test('confirmed Copilot draft keeps its evidence chip (with date and revision) o
   await expect(task).toContainText('Mock: reconfirmation reminder');
   const chip = task.getByTestId('evidence-chip');
   await expect(chip).toBeVisible(); // on THIS card, not just any card
-  await expect(chip).toContainText('cancelled');
+  await expect(chip).toContainText('registered_and_attended: 1,350');
   await chip.click();
-  await expect(task.getByTestId('evidence-detail')).toContainText(/as of 2025-04-20/);
+  await expect(task.getByTestId('evidence-detail')).toContainText(/as of 2025-04-12/);
   await expect(task.getByTestId('evidence-detail')).toContainText(/rev \d+/);
 });
 
@@ -109,10 +114,11 @@ test('every experiment form exposes its typed guardrail inputs; B5 confirmation 
 });
 
 test('B5 hard floor: confirmation 70% → Stop and the reserve is held (server-adjudicated); 80% → Change; 90% → Scale', async ({ request }) => {
-  const post = async (conf: number) => (await (await request.post('/api/mutations/experiment', { data: { action: 'readout', id: 5, observed_value: 12, observed_n: 500, guardrail_observations: { confirmation_pct: conf, marginal_visitor_cost_inr: 150 }, gate_inputs: { forecast_extra_visitors: 45, forecast_visitor_cost_inr: 140 } } })).json()).row;
+  const post = async (conf: number, withCounts = true) => (await (await request.post('/api/mutations/experiment', { data: { action: 'readout', id: 5, observed_value: 12, observed_n: 500, ...(withCounts ? { kpi_numerator: 60, kpi_denominator: 500 } : {}), guardrail_observations: { confirmation_pct: conf, marginal_visitor_cost_inr: 150 }, gate_inputs: { forecast_extra_visitors: 45, forecast_visitor_cost_inr: 140 } } })).json()).row;
   const stop = await post(70);
   expect(stop.decision).toBe('stop'); expect(stop.observation.gates[0].decision).toBe('hold');
   expect((await post(80)).decision).toBe('change');
+  expect((await post(85, false)).observation.gates[0].decision).toBe('insufficient_evidence');
   const ok = await post(90);
   expect(ok.decision).toBe('scale'); expect(ok.observation.gates[0].decision).toBe('release');
 });

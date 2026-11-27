@@ -32,7 +32,20 @@ describe('B5 reserve release needs a complete, eligible readout (P1-1)', () => {
   it('a count denominator below the published minimum (400) never releases, whatever n is typed', () => {
     const low = adjudicateExperiment(b5, { ...base, observed_value: 13.33, kpi_numerator: 40, kpi_denominator: 300, observed_n: 900 });
     expect(effectiveSample(b5, { kpi_denominator: 300, observed_n: 900 })).toBe(300);
-    expect(low.decision).toBe('insufficient_sample'); expect(gate(low).decision).not.toBe('release');
+    expect(low.decision).toBe('insufficient_sample'); expect(gate(low).decision).toBe('insufficient_evidence');
+    const edited = adjudicateExperiment({ ...b5, min_sample: 100 }, {
+      ...base, observed_value: 12, kpi_numerator: 48, kpi_denominator: 399,
+      guardrail_observations: { ...okG, confirmation_pct: 85 },
+    });
+    expect(gate(edited).decision).toBe('insufficient_evidence');
+  });
+  it('a manual 12% KPI and declared n=500 are insufficient for reserve release', () => {
+    const manual = adjudicateExperiment(b5, {
+      observed_value: 12, observed_n: 500, guardrail_observations: { ...okG, confirmation_pct: 85 },
+      gate_inputs: { forecast_extra_visitors: 40, forecast_visitor_cost_inr: 150 },
+    });
+    expect(gate(manual).decision).toBe('insufficient_evidence');
+    expect(gate(manual).reasons.at(-1)?.label).toMatch(/qualified-click KPI numerator and denominator/i);
   });
   it('forecast cost must be > 0: ₹0 holds, a negative cost is rejected by validation', () => {
     expect(gate(adjudicateExperiment(b5, { ...base, observed_value: 10, gate_inputs: { forecast_extra_visitors: 45, forecast_visitor_cost_inr: 0 } })).decision).toBe('hold');

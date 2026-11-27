@@ -201,7 +201,7 @@ describe('migration 0003: legacy string guardrails → typed records (public + s
     const b3 = await readout(3, { observed_value: 30, observed_n: 250, guardrail_observations: { abuse_pct: 6, visitor_cost_inr: 100 } });
     expect(b3.decision).toBe('stop');
     const rel = { forecast_extra_visitors: 45, forecast_visitor_cost_inr: 140 };
-    const b5 = (c: number) => readout(5, { observed_value: 12, observed_n: 500, guardrail_observations: { confirmation_pct: c, marginal_visitor_cost_inr: 150 }, gate_inputs: rel });
+    const b5 = (c: number) => readout(5, { kpi_numerator: 60, kpi_denominator: 500, guardrail_observations: { confirmation_pct: c, marginal_visitor_cost_inr: 150 }, gate_inputs: rel });
     const stop = await b5(70);
     expect(stop.decision).toBe('stop'); expect(stop.observation.gates[0].decision).toBe('hold');
     expect(stop.observation.gates[0].reasons.some((r: any) => /blocked/.test(r.label))).toBe(true);

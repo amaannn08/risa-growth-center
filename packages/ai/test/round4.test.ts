@@ -3,7 +3,7 @@ import { createDb, resetToSeed, seedDb, type Db } from '@gc/db';
 import { itemProvenance } from '@gc/core';
 import { makeEnv, runTool, clarifyingQuestion } from '../src';
 import { finalAnswerText, groundingFromCalls } from '../src/grounding';
-import { buildEvidence } from '../src/evidence';
+import { buildEvidence, modelToolOutput } from '../src/evidence';
 import { ITEMS } from '../eval/questions';
 
 let db: Db;
@@ -75,6 +75,31 @@ describe('claims are bound to metric, scope and signed value (round-3 P1-2)', ()
     expect(mixed.as_of).toBeNull(); expect(mixed.data_revision).toBeNull();
     expect(itemProvenance(mixed.items[1]!, { as_of: '2025-04-18', data_revision: 9 })).toBe(' (unverified)');
   });
+  it('projects the real call ID and rejects same-unit field, campaign, date and attribution swaps', async () => {
+    const { outs, evidence } = await turn([['get_funnel', { checkpoint: 'day_1' }], ['get_spend_ledger', { from: '2025-04-16', through: '2025-04-18' }]]);
+    const funnel = modelToolOutput(outs[0]);
+    expect(funnel).not.toHaveProperty('_evidence');
+    expect(funnel.call_id).toBe('e1');
+    const item = { tool: 'get_funnel', call_id: funnel.call_id, field: 'people.registered', metric: 'registered people', value: 2800, as_of: '2025-04-12', attribution: 'first_touch' };
+    expect(buildEvidence([item], evidence)!.items[0]).toMatchObject({ verified: true, ref: { toolCallId: evidence[0]!.toolCallId, metricField: 'people.registered', scope: 'overall', signedValue: 2800 } });
+    for (const patch of [{ metric: 'unique verified visitors' }, { campaign_id: 'C02' }, { as_of: '2025-04-20' }, { attribution: 'registration_source' }]) {
+      expect(buildEvidence([{ ...item, ...patch }], evidence)!.items[0]!.verified).toBe(false);
+    }
+    const ledger = modelToolOutput(outs[1]);
+    const credit = { tool: ledger.tool, call_id: ledger.call_id, field: 'credits[0].amount', metric: 'Student Referrals credit', value: -2000 };
+    expect(buildEvidence([credit], evidence)!.items[0]!.verified).toBe(false);
+    expect(buildEvidence([{ ...credit, metric: 'Creator Partners credit' }], evidence)!.items[0]!.ref).toMatchObject({ scope: 'C03', asOf: '2025-04-16' });
+    expect(groundingFromCalls('There were 2,800 unique verified visitors [get_funnel].', evidence).ok).toBe(false);
+    expect(groundingFromCalls('| Registered ∩ attended | 1,350 |', evidence).ok).toBe(true);
+    expect(groundingFromCalls('Student Referrals posted a −₹2,000 credit [get_spend_ledger].', evidence).ok).toBe(false);
+    expect(groundingFromCalls('Creator Partners posted a −₹2,000 credit on 16 Apr [get_spend_ledger].', evidence).ok).toBe(true);
+    expect(groundingFromCalls('| Credits | −₹2,500 (C03 −₹2,000; C05 −₹500) |', evidence).ok).toBe(true);
+  });
+  it('a calculator citation in a table row does not relabel the other source figures', async () => {
+    const { evidence } = await turn([['get_targets', {}], ['get_funnel', {}], ['calculate', { expression: '274000/300000*100' }]]);
+    const row = '| Net marketing spend | ₹274,000 | ₹300,000 | −₹26,000 | 91.33% [calculate] |';
+    expect(groundingFromCalls(row, evidence).ok).toBe(true);
+  });
   it('checkpoint args resolve to explicit dates and are echoed', async () => {
     const { outs } = await turn([['get_funnel', { checkpoint: 'event_close' }], ['get_spend_ledger', { checkpoint: 'event_close' }], ['get_funnel', { checkpoint: 'day_1' }]], { asOf: '2025-04-20' });
     expect(outs.map((o) => o.as_of)).toEqual(['2025-04-13', '2025-04-13', '2025-04-12']);
@@ -107,9 +132,13 @@ describe('ranged ledger and attendance scope (P2-7)', () => {
     expect(o.headroom_inr).toBeUndefined();
   });
   it('get_attendance exposes dated scanner attempts / verified admissions with event and people denominators', async () => {
-    const { outs } = await turn([['get_attendance', {}]]);
+    const { outs, evidence } = await turn([['get_attendance', {}]]);
     const sat = outs[0].by_day.find((d: any) => d.date === '2025-04-12');
     expect(sat).toMatchObject({ scanner_attempt_events: 1760, scanner_verified_admission_events: 1710, distinct_visitors: 1430, manual_verified_admission_events: 195, scanner_verified_people: 1310, all_attempt_people: 1467 });
+    const sun = outs[0].by_day.find((d: any) => d.date === '2025-04-13');
+    expect(sun).toMatchObject({ scanner_verified_people: 1235, manual_only_verified_people: 110, both_sources_verified_people: 0 });
+    expect(evidence[0]!.refs.find((r) => r.metricField === 'by_day[0].scanner_verified_admission_events')?.asOf).toBe('2025-04-12');
+    expect(evidence[0]!.refs.find((r) => r.metricField === 'by_day[1].manual_only_verified_people')?.asOf).toBe('2025-04-13');
     expect(Math.round((1710 / 1760) * 10000) / 100).toBe(97.16);
   });
 });

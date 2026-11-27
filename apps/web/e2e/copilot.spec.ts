@@ -26,8 +26,12 @@ test('draft card: confirm creates exactly one task visible on Execution', async 
   await card.getByRole('button', { name: 'Confirm' }).click();
   await expect(card).toContainText(/Task #\d+ created/);
   await page.goto('/execution');
-  await expect(page.getByText('Mock: reconfirmation reminder for confirmed registrants')).toHaveCount(1);
-  await expect(page.getByTestId('evidence-chip').first()).toBeVisible();
+  const task = page.getByTestId('col-todo').locator('[data-testid^="task-"]').filter({ hasText: 'Mock: reconfirmation reminder for confirmed registrants' });
+  await expect(task).toHaveCount(1);
+  const chip = task.getByTestId('evidence-chip');
+  await expect(chip).toContainText(/registered_and_attended: 1,350 .*as of 2025-04-12, rev \d+/);
+  await expect(chip).toContainText(/registered: 2,800 .*as of 2025-04-12, rev \d+/);
+  await expect(chip).not.toContainText('unverified');
 });
 
 test('discarding a draft creates nothing', async ({ page, request }) => {

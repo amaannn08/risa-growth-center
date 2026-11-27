@@ -6,12 +6,12 @@ import { DEFAULT_ASSUMPTIONS, slideContent, slideText, strategyModel } from '../
 const root = resolve(__dirname, '../../..');
 const m = strategyModel(DEFAULT_ASSUMPTIONS);
 // numbers every document must carry (plan §7)
-const NUMS = ['2,400', '2,850', '2,972', '3,397', '2,690', '3,097', '2,276', '2,725', '2,229', '0.7 pp', '₹273,000', '₹279,000', '₹27,000', '2,206', '92', '85', '80', '71', '54'];
+const NUMS = ['2,400', '2,800', '2,972', '3,397', '2,690', '3,097', '2,276', '2,717', '2,229', '0.7 pp', '₹273,000', '₹279,000', '₹27,000', '2,206', '92', '85', '80', '71', '54'];
 
 describe('docs consistency (§7 model = README = slides)', () => {
   it('model defaults produce the documented numbers', () => {
-    expect([m.base.headline, m.stretch.headline, m.base.registrations, m.stretch.registrations, m.base.confirmed, m.stretch.confirmed]).toEqual([2400, 2850, 2972, 3397, 2690, 3097]);
-    expect([m.base.registered_visitors, m.stretch.registered_visitors, m.base.spend, m.stretch.spend, m.base.reserve, m.sensitivity.base.no_reminders_no_walkins]).toEqual([2276, 2725, 273000, 279000, 27000, 2206]);
+    expect([m.base.headline, m.stretch.headline, m.base.registrations, m.stretch.registrations, m.base.confirmed, m.stretch.confirmed]).toEqual([2400, 2800, 2972, 3397, 2690, 3097]);
+    expect([m.base.registered_visitors, m.stretch.registered_visitors, m.base.spend, m.stretch.spend, m.base.reserve, m.sensitivity.base.no_reminders_no_walkins]).toEqual([2276, 2717, 273000, 279000, 27000, 2206]);
   });
   it('/slides content module carries every number', () => {
     const t = slideText(slideContent(m));

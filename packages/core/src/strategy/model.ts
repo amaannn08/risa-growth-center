@@ -23,7 +23,7 @@ export interface ScenarioResult {
   reference: { spend: number; registered: number; confirmed: number; visitors: number; campaigns: ReferenceCampaign[] };
   bets: BetResult[];
   /** B4 eligibility chain: confirmed → opted in → minus holdout → treated (never above the requested target) */
-  reminder: { target: number; confirmed: number; optin_rate: number; eligible_optin: number; holdout_share: number; holdout: number; treatable: number; treated: number; waves: number; wave1_pp: number; wave2_pp: number; lift_pp: number; required_eligible: number | null; required_confirmed: number | null; feasible: boolean };
+  reminder: { target: number; confirmed: number; optin_rate: number; eligible_optin: number; holdout_share: number; holdout: number; treatable: number; treated: number; day_of_treated: number; waves: number; wave1_pp: number; wave2_pp: number; lift_pp: number; required_eligible: number | null; required_confirmed: number | null; feasible: boolean };
   added_regs: number; added_confirmed: number; acquisition_visitors: number; reminder_visitors: number;
   registrations: number; confirmed: number; registered_visitors: number; show_up_of_registrations: number;
   walkins: number; total: number; headline: number;
@@ -82,14 +82,16 @@ function scenarioResult(as: Assumption[], s: Scenario, history: CampaignHistory[
   const optin = Math.min(1, Math.max(0, g('b4_optin'))), holdoutShare = Math.min(1, Math.max(0, g('b4_holdout'))), target = g('b4_treated');
   const eligibleOptin = Math.floor(confirmedPreB4 * optin + 1e-9), treatable = Math.floor(eligibleOptin * (1 - holdoutShare) + 1e-9);
   const treated = Math.min(target, treatable);
-  // two-wave cadence (pre-event + day-of): the 2nd wave raises visits per treated person, never the treated count
-  const wave1 = g('b4_lift_pp'), wave2 = g('b4_wave2_pp'), liftPp = wave1 + wave2;
+  const wave1 = g('b4_lift_pp'), wave2 = g('b4_wave2_pp');
+  const hasDayOf = s === 'stretch' || wave2 !== 0;
+  const dayOfTreated = hasDayOf ? Math.floor(treated / 2) : 0;
+  const liftPp = wave1 + (treated ? dayOfTreated / treated * wave2 : 0);
   const reminderInfo = {
-    target, confirmed: confirmedPreB4, optin_rate: optin, eligible_optin: eligibleOptin, holdout_share: holdoutShare, holdout: eligibleOptin - treatable, treatable, treated, waves: wave2 > 0 ? 2 : 1, wave1_pp: wave1, wave2_pp: wave2, lift_pp: liftPp,
+    target, confirmed: confirmedPreB4, optin_rate: optin, eligible_optin: eligibleOptin, holdout_share: holdoutShare, holdout: eligibleOptin - treatable, treatable, treated, day_of_treated: dayOfTreated, waves: hasDayOf ? 2 : 1, wave1_pp: wave1, wave2_pp: wave2, lift_pp: liftPp,
     // a 100% holdout leaves nobody to treat and a 0% opt-in leaves nobody eligible: no cohort size can reach the target (null, never a division by zero)
     required_eligible: holdoutShare >= 1 ? null : Math.ceil(target / (1 - holdoutShare) - 1e-9), required_confirmed: holdoutShare >= 1 || optin <= 0 ? null : Math.ceil(target / (1 - holdoutShare) / optin - 1e-9), feasible: target <= treatable,
   };
-  const bets: BetResult[] = [...acq, { id: 'B4', kind: 'turnout', extra_regs: 0, visitors: rnd(treated * liftPp / 100), budget: g('b4_budget'), formula: wave2 > 0 ? `${treated} treated × (${wave1} pp pre-event + ${wave2} pp day-of) = ${rnd(liftPp * 10) / 10} pp` : `${treated} treated × ${wave1} pp` }];
+  const bets: BetResult[] = [...acq, { id: 'B4', kind: 'turnout', extra_regs: 0, visitors: rnd((treated * wave1 + dayOfTreated * wave2) / 100), budget: g('b4_budget'), formula: hasDayOf ? `${treated} pre-event × ${wave1} pp + ${dayOfTreated} day-of × ${wave2} pp` : `${treated} treated × ${wave1} pp` }];
   const acqVisitors = bets.filter((b) => b.kind === 'acquisition').reduce((t, b) => t + b.visitors, 0);
   const reminder = bets.find((b) => b.id === 'B4')!.visitors;
   const addedRegs = bets.reduce((t, b) => t + b.extra_regs, 0);

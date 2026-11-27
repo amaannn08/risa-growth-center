@@ -1,0 +1,11 @@
+import { ask, userMsg } from '../eval/client';
+import { ITEMS } from '../eval/questions';
+import { groundingFromCalls } from '../src/grounding';
+const base = process.argv[2]!; const id = Number(process.argv[3]);
+const item = ITEMS.find((i) => i.id === id)!;
+const t = await ask(base, [userMsg(item.q, 0)], item.context ?? {}, `probe-${id}`);
+const calls = t.tools.map((x) => x.output?._evidence).filter(Boolean);
+const g = groundingFromCalls(t.text, calls, [item.q]);
+console.log(t.text); console.log('TOOLS', t.tools.map((x) => x.name).join(','));
+console.log('GROUND', JSON.stringify({ unmatched: g.unmatched, mm: g.claim_mismatches, bad: g.bad_citations }));
+if (process.argv[4]) console.log(JSON.stringify(calls.flatMap((c: any) => c.refs.map((r: any) => `${c.tool}:${r.metricField}=${r.signedValue}`))).slice(0, 6000));

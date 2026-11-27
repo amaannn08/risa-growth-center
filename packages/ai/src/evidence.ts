@@ -1,8 +1,8 @@
 import { canonicalValue, normalizeEvidence, type EvidenceItem, type EvidenceRef } from '@gc/core';
-import { explicitDates, namedCheckpointDates } from './grounding';
+import { campaignScope, claimMetric, explicitDates, namedCheckpointDates, scopeConflict } from './grounding';
 
 /** Everything one tool call contributes as citable evidence. Issued by the SERVER at call time; never read back from the client. */
-export interface CallEvidence { toolCallId: string; tool: string; asOf: string | null; revision: number | null; refs: EvidenceRef[]; /** named checkpoints (event close, data close, day 1) as resolved to dates by this run */ checkpoints?: Record<string, string> | null }
+export interface CallEvidence { toolCallId: string; selector?: string; tool: string; asOf: string | null; revision: number | null; refs: EvidenceRef[]; metric?: string; /** named checkpoints (event close, data close, day 1) as resolved to dates by this run */ checkpoints?: Record<string, string> | null }
 
 const MAX_REFS = 500;
 const INR_METRIC_RE = /spen[dt]|cost|cpa|cpm|budget|credit|headroom|amount/i, FRACTION_METRIC_RE = /show_?up|ctr|rate|per_|share|conversion|fraction/i;
@@ -28,16 +28,19 @@ export function issueRefs(toolCallId: string, tool: string, out: any): EvidenceR
   // scope of a figure: ranged ledger figures carry their bounds, budget headroom is event-wide, checkpoint rows carry their own date
   const callScope = typeof out.scope === 'string' ? out.scope : null;
   const ranged = out.range && out.range.cumulative === false ? `range ${out.range.from}..${out.range.through}` : null;
-  const RANGE_FIELDS = /^(?:credits(?:\[|$)|credits_total_inr$|gross_positive_spend_inr$|net_spend_inr$)/;
+  const RANGE_FIELDS = /^(?:credits_total_inr|gross_positive_spend_inr|net_spend_inr)$/;
   const scopeAt = (path: string): { scope: string | null; asOf: string | null } => {
     const cp = /^checkpoints\[(\d+)\]\./.exec(path);
     const cpDate = cp ? out.checkpoints?.[Number(cp[1])]?.date : null;
     if (/(^|\.)(event_wide_\w+|event_net_spend_overall_inr|budget_cap_headroom_inr)$/.test(path) || /\.event_wide_|\.event_net_spend_overall_inr$/.test(path)) return { scope: 'event-wide', asOf: cpDate ?? base.asOf };
     if (/^programme_reference\./.test(path)) return { scope: 'overall', asOf: base.asOf };
     if (cpDate) return { scope: callScope, asOf: cpDate };
-    const cr = /^credits\[(\d+)\]\./.exec(path); // a credit row belongs to the campaign it was posted to
-    if (cr) return { scope: out.credits?.[Number(cr[1])]?.campaign_id ?? callScope, asOf: base.asOf };
-    return { scope: ranged && RANGE_FIELDS.test(path) ? ranged : callScope, asOf: base.asOf };
+    const row = /^(credits|positive_postings|by_day|ranked|per_campaign_gaps|campaigns|series)\[(\d+)\]\./.exec(path);
+    if (row) {
+      const item = out[row[1]!]?.[Number(row[2])];
+      return { scope: item?.campaign_id ?? callScope, asOf: item?.date ?? item?.period_end ?? base.asOf };
+    }
+    return { scope: ranged && RANGE_FIELDS.test(path) ? (campaignScope(callScope) ? `${ranged} (${callScope})` : ranged) : callScope, asOf: base.asOf };
   };
   const push = (metricField: string, signedValue: number, unit?: string) => {
     if (refs.length >= MAX_REFS) return;
@@ -53,7 +56,7 @@ export function issueRefs(toolCallId: string, tool: string, out: any): EvidenceR
         const n = Number(m[2]!.replace(/,/g, '')); if (Number.isFinite(n)) push(path, m[1] ? -n : n, m[3] ? 'percent' : undefined);
       }
     } else if (Array.isArray(v)) v.slice(0, 120).forEach((x, i) => walk(x, `${path}[${i}]`, depth + 1));
-    else if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) { if (k === 'units' || k === '_evidence' || (tool === 'calculate' && k === 'expression')) continue; walk(x, path ? `${path}.${k}` : k, depth + 1); }
+    else if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) { if (k === 'units' || k === 'data_revision' || k === '_evidence' || (path && /^(activity_id|campaign_id|draft_id)$/.test(k)) || (tool === 'calculate' && k === 'expression')) continue; walk(x, path ? `${path}.${k}` : k, depth + 1); }
   };
   walk(out, '', 0);
   return refs;
@@ -61,17 +64,21 @@ export function issueRefs(toolCallId: string, tool: string, out: any): EvidenceR
 
 export const callEvidence = (toolCallId: string, tool: string, out: any): CallEvidence =>
   ({ toolCallId, tool, asOf: typeof out?.as_of === 'string' ? out.as_of : null, revision: typeof out?.data_revision === 'number' ? out.data_revision : null, refs: issueRefs(toolCallId, tool, out),
+    ...(typeof out?.metric === 'string' ? { metric: out.metric } : {}),
     checkpoints: out?.checkpoint_dates && typeof out.checkpoint_dates === 'object' ? out.checkpoint_dates : null });
 
 /** What the MODEL sees: the output without the (large) server-side evidence block. */
 export const stripEvidence = (out: any) => { if (out && typeof out === 'object' && '_evidence' in out) { const { _evidence: _e, ...rest } = out; return rest; } return out; };
 
-const tokens = (s: string) => s.toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length > 2);
+/** Expose the call selector to the model while keeping the full ref list on the server. */
+export const modelToolOutput = (out: any) => out?._evidence
+  ? { call_id: out._evidence.selector ?? out._evidence.toolCallId, ...stripEvidence(out) }
+  : out;
 
 const INR_METRIC = /\b(?:spen[dt]|spending|cost|costs|cpa|cpm|budget|credits?|debits?|refunds?|headroom|cap|rupees?|inr|net|gross|postings?)\b/i;
 const COUNT_METRIC = /\b(?:visitors?|people|persons?|registrations?|registered|attendees?|admissions?|admitted|check-?ins?|clicks?|impressions|sessions|scanner|scans?|confirmed|cancel\w*|waitlist\w*|no-?shows?|events?)\b/i;
 const isInr = (u: string) => /inr|₹|rupee/i.test(u);
-export interface EvidenceClaim { tool: string; metric: string; value: number | string; /** the tool call that produced the figure */ call_id?: string; /** path of the field in that call's output */ field?: string; as_of?: string }
+export interface EvidenceClaim { tool: string; metric: string; value: number | string; /** the tool call that produced the figure */ call_id?: string; /** path of the field in that call's output */ field?: string; as_of?: string; campaign_id?: string; attribution?: string }
 
 /** Why a candidate ref cannot support the claim (sign, unit, metric family, checkpoint scope); null when it can. */
 function refConflict(item: EvidenceClaim, r: EvidenceRef, c: CallEvidence): string | null {
@@ -86,38 +93,39 @@ function refConflict(item: EvidenceClaim, r: EvidenceRef, c: CallEvidence): stri
     if (isInr(r.unit) && cntM && !inrM && !/₹/.test(text)) return 'metric';
     if (!isInr(r.unit) && !/fraction|percent|pct|rate/.test(r.unit) && inrM && !cntM) return 'metric';
   }
-  const wanted = namedCheckpointDates(`${item.metric} ${item.as_of ?? ''}`, c.checkpoints ?? null);
-  if (wanted.length && !/^range /.test(r.scope ?? '') && r.asOf && !wanted.includes(r.asOf)) return 'scope';
-  const dated = explicitDates(item.as_of ?? '', null);
-  if (dated.length && r.asOf && !dated.includes(r.asOf)) return 'scope';
+  const label = `${item.metric} ${item.as_of ?? ''}`.replace(/_/g, ' ');
+  const wanted = [...namedCheckpointDates(label, c.checkpoints), ...explicitDates(label, c.asOf?.slice(0, 4) ?? null)];
+  if (wanted.some((date) => date !== r.asOf)) return 'scope';
+  if (item.campaign_id && item.campaign_id.toUpperCase() !== campaignScope(r.scope)) return 'scope';
+  if (item.attribution && item.attribution !== r.attribution) return 'scope';
+  if (scopeConflict(label, r)) return 'scope';
   return null;
 }
 
-/**
- * Resolve a model-written evidence item against the tool runs of THIS turn. The item should name the exact `call_id` and `field`; without them
- * the match requires the same tool and the same SIGNED figure (to the written precision) and the metric name's overlap with the field path decides.
- * A figure whose sign, unit, metric family or checkpoint scope disagrees with the field is never bound: `verified: false`, no ref.
- * A verified item stores the tool's canonical value, not the model's wording of it.
- */
+/** Resolve an item against this turn. Without selectors, its metric, value and scope must identify a single ref. */
 export function resolveEvidenceItem(item: EvidenceClaim, calls: CallEvidence[]): EvidenceItem {
   const num = typeof item.value === 'number' ? item.value : Number(String(item.value).replace(/[₹,%\s+]/g, '').replace('−', '-'));
   const unverified = (): EvidenceItem => ({ tool: item.tool, metric: item.metric, value: item.value, ref: null, verified: false });
   if (!Number.isFinite(num) || (typeof item.value === 'string' && /[→/]/.test(item.value))) return unverified();
   const dp = (String(item.value).split('.')[1] ?? '').replace(/\D/g, '').length;
-  const tol = 0.5 * 10 ** -dp + 1e-9, want = tokens(item.metric);
-  let best: { ref: EvidenceRef; score: number } | null = null;
+  const tol = 0.5 * 10 ** -dp + 1e-9;
+  const refs: EvidenceRef[] = [];
   for (const c of calls) {
-    if (c.tool !== item.tool || (item.call_id && c.toolCallId !== item.call_id)) continue;
+    if (c.tool !== item.tool || (item.call_id && c.toolCallId !== item.call_id && c.selector !== item.call_id.toLowerCase())) continue;
     for (const r of c.refs) {
       if (item.field && r.metricField !== item.field) continue;
       const exact = Math.abs(r.signedValue - num) <= tol, pct = Math.abs(r.signedValue * 100 - num) <= tol && /%/.test(String(item.value)) && /fraction/.test(r.unit);
-      const flipped = !exact && !pct && Math.abs(r.signedValue + num) <= tol; // same magnitude, opposite sign: a sign reversal, never a match
-      if (flipped || (!exact && !pct) || refConflict(item, r, c)) continue;
-      const score = tokens(r.metricField).filter((t) => want.includes(t)).length + (exact ? 0.5 : 0) + (item.field ? 10 : 0);
-      if (!best || score >= best.score) best = { ref: r, score }; // ties → the latest run
+      if ((!exact && !pct) || refConflict(item, r, c)) continue;
+      const label = claimMetric(item.metric, r, c.metric);
+      const fieldLabel = r.metricField.split('.').at(-1)?.replace(/_inr$/, '');
+      const sameField = item.metric.toLowerCase() === r.metricField.toLowerCase()
+        || item.metric.trim().toLowerCase().replace(/\s+/g, '_') === fieldLabel;
+      if (label === false || (!sameField && label !== true)) continue;
+      refs.push(r);
     }
   }
-  return best ? { tool: item.tool, metric: item.metric, value: canonicalValue(best.ref), ref: best.ref, verified: true } : unverified();
+  const ref = refs.length === 1 ? refs[0] : undefined;
+  return ref ? { tool: item.tool, metric: item.metric, value: canonicalValue(ref), ref, verified: true } : unverified();
 }
 
 /** Canonical stored evidence: items resolved from the turn's tool runs; wrapper date/revision only when EVERY item is verified and they agree. */

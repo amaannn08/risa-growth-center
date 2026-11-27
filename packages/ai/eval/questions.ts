@@ -1,5 +1,5 @@
 /**
- * 65 eval items (59 below + 6 round-4 regression cases, ids 60–65): 34 original (plan §10) + 20 independent red-team questions from the round-1 grader review (ids 35–54, with their verified answers) + 1 live-LLM clarification probe (id 55)
+ * 71 eval items (59 below + 6 round-4 + 6 round-5 regression cases): 34 original (plan §10) + 20 independent red-team questions from the round-1 grader review (ids 35–54, with their verified answers) + 1 live-LLM clarification probe (id 55)
  * + 4 round-3 regression cases for the deployed-eval misses and review findings (ids 56–59: weekly cutoff series, paused-campaign wording, same-message draft, resolved clarification follow-up). Each item has:
  *  - `calls`: deterministic tool calls used by test/tools.test.ts (no LLM) — they prove the ground truth independently of the model;
  *  - `tools`: any-of tools the LLM is expected to call (eval runner);
@@ -12,6 +12,7 @@ export interface EvalItem {
   context?: { asOf?: string; attribution?: string; page?: string };
   setup?: SetupOp[]; tools: string[]; calls: { tool: string; args: Record<string, unknown> }[];
   must: string[]; mustNot?: string[]; kind?: 'normal' | 'refusal' | 'draft'; source: string;
+  verifiedEvidence?: { field: string; value: number; asOf: string; scope: string; attribution: string }[];
   /** the correct behaviour is a clarifying question: no tool may be called */ noTools?: boolean;
 }
 
@@ -65,7 +66,7 @@ export const ITEMS: EvalItem[] = [
   { id: 21, q: "What would visitor CPA be if we'd spent the full ₹300,000?", tools: ['calculate', 'get_funnel'], calls: [{ tool: 'calculate', args: { expression: '300000/2050' } }],
     must: ['146.34'], source: '300000/2050 = 146.34' },
   { id: 22, q: "What's the next-edition plan and how confident are we?", tools: ['get_strategy_model'], calls: [{ tool: 'get_strategy_model', args: {} }],
-    must: ['2,400', '2,850', '273,000', '2,206', '/assum/i'], source: '§7 strategy model' },
+    must: ['2,400', '2,800', '273,000', '2,206', '/assum/i'], source: '§7 strategy model' },
   { id: 23, q: 'Create a task for Meera to launch the group-pass pilot by 2026-01-20', kind: 'draft', tools: ['propose_task'],
     calls: [{ tool: 'propose_task', args: { title: 'Launch the group-pass pilot', owner_id: 'Meera', due_date: '2026-01-20', priority: 'p1', bet_id: 'B1', evidence: [] } }],
     must: ['/confirm/i', '2026-01-20|20 Jan'], mustNot: ['/(task|it) (has been|was|is now) created/i'], source: 'draft only until the user confirms' },
@@ -190,6 +191,33 @@ ITEMS.push(
     must: ['1,710', '1,760', '97.16', '/1,430|2,050/'], source: 'round-3 review A16: get_attendance.by_day exposes dated scanner attempts and verified admissions (events) next to people denominators: 1,710 / 1,760 = 97.16% in events; 1,430 distinct visitors is a people count' },
   { id: 65, q: 'On day 1 of the event, how many unique verified visitors were there?', tools: ['get_funnel', 'get_attendance'], calls: [{ tool: 'get_funnel', args: { checkpoint: 'day_1' } }],
     must: ['1,430', '/12 Apr|2025-04-12/i'], source: 'named checkpoint "day 1" resolves to the first event day (2025-04-12), not the page date' },
+);
+
+// Round 5 regressions from the deployed review.
+ITEMS.push(
+  { id: 66, q: 'Compare the overall cumulative net marketing spend at Event Close and Data Close after a possible new ledger posting. Use separate dated ledger calls, and identify the difference.',
+    setup: [{ entity: 'daily_marketing', action: 'add', input: { campaign_id: 'C07', activity_date: '2025-04-19', marketing_spend_inr: 1379, platform: 'eval' } }],
+    tools: ['get_spend_ledger'], calls: [{ tool: 'get_spend_ledger', args: { checkpoint: 'event_close' } }, { tool: 'get_spend_ledger', args: { checkpoint: 'data_close' } }, { tool: 'get_spend_ledger', args: { from: '2025-04-14', through: '2025-04-20' } }],
+    must: ['276,500', '275,379', '1,121', '1,379', 'Community Groups'], mustNot: ['/no[^.]*posting[^.]*exists|only[^.]*credits|no spend postings/i'], source: 'round-4 changed data: +₹1,379 debit and −₹2,500 credits after event close' },
+  { id: 67, q: 'Compare Organic Search cumulative clicks and first-touch registrations as of 31 March 2025. What percentage of its clicks were first-touch registrations?',
+    tools: ['get_funnel'], calls: [{ tool: 'get_funnel', args: { campaign_id: 'C06', as_of: '2025-03-31' } }, { tool: 'calculate', args: { expression: '217/2042*100' } }],
+    must: ['2,042', '217', '10.63'], source: 'round-4 N03: one campaign, two measures; 217/2,042' },
+  { id: 68, q: 'For Paid Social, compare number of impressions with number of clicks on 9 March 2025, that single day only. Give its CTR.',
+    tools: ['get_trend'], calls: [{ tool: 'get_trend', args: { campaign_id: 'C02', from: '2025-03-09', through: '2025-03-09', granularity: 'day', metric: 'ctr' } }],
+    must: ['5,487', '117', '2.13'], source: 'round-4 N15: daily Paid Social 117 clicks / 5,487 impressions' },
+  { id: 69, q: 'How many unique people were verified by scanner on Sunday, how many only by manual entry on Sunday, and how many were verified by both methods that day?',
+    tools: ['get_attendance'], calls: [{ tool: 'get_attendance', args: {} }],
+    must: ['1,235', '110', '/(?:both[^\\n.!?]{0,60}\\b(?:0|zero|none)\\b|\\b(?:0|zero|none)\\b[^\\n.!?]{0,60}both)/i'], source: 'round-4 N14: Sunday scanner 1,235, manual-only 110, both 0' },
+  { id: 70, q: 'Draft a P1 task titled “Reconcile first-day registrations” for Nisha, due 2026-02-11. Get the overall funnel on day 1 (12 April 2025). Use registered-and-attended people and registered people as exactly two separate numeric evidence items with the exact metric field and 12 April date. Wait for confirmation.',
+    kind: 'draft', tools: ['get_funnel', 'propose_task'], calls: [{ tool: 'get_funnel', args: { checkpoint: 'day_1' } }],
+    verifiedEvidence: [
+      { field: 'people.registered_and_attended', value: 1350, asOf: '2025-04-12', scope: 'overall', attribution: 'first_touch' },
+      { field: 'people.registered', value: 2800, asOf: '2025-04-12', scope: 'overall', attribution: 'first_touch' },
+    ],
+    must: ['1,350', '2,800', '/confirm/i'], mustNot: ['/unverified/i'], source: 'round-4 mobile draft: verify both refs on the confirmed task' },
+  { id: 71, q: 'For the next-edition stretch model, who receives each reminder cadence, which contrast estimates the day-of increment, and how many incremental visitors does B4 project across the active 50/50 split?',
+    tools: ['get_strategy_model'], calls: [{ tool: 'get_strategy_model', args: { scenario: 'stretch' } }],
+    must: ['137', '/holdout[^.\\n]{0,70}(?:no (?:messages|reminders)|none)|(?:no (?:messages|reminders)|none)[^.\\n]{0,70}holdout/i', '/pre.event.only/i', '/day.of/i'], source: 'B4 split-arm projection: 2,229 × 5.8 pp plus 1,114 × 0.7 pp gives 137' },
 );
 
 export const itemById = (id: number) => ITEMS.find((i) => i.id === id)!;

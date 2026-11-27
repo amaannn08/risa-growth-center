@@ -32,6 +32,22 @@ test('(a) ₹1,000 C02 debit changes close numbers but not 13 Apr; audit log rec
   await expect(page.getByTestId('rev-badge')).toContainText('1 edit since reset');
 });
 
+test('Copilot names the newly posted debit in the close-to-close reconciliation', async ({ page, request }) => {
+  const posted = await request.post('/api/mutations/daily_marketing', {
+    data: { action: 'add', campaign_id: 'C07', activity_date: '2025-04-19', marketing_spend_inr: 1379, platform: 'eval' },
+  });
+  expect((await posted.json()).ok).toBe(true);
+  await page.goto('/copilot');
+  await page.getByLabel('Ask the Copilot').fill('Compare net spend at event close and data close after a possible new ledger posting. Identify the change.');
+  await page.getByRole('button', { name: 'Send' }).click();
+  const answer = page.getByTestId('assistant-msg').last();
+  await expect(answer).toContainText('₹276,500');
+  await expect(answer).toContainText('₹275,379');
+  await expect(answer).toContainText('−₹1,121');
+  await expect(answer).toContainText(/2025-04-19.*Community Groups.*₹1,379/);
+  await expect(answer).not.toContainText(/no spend postings|only credits/i);
+});
+
 test('(b) Reset to original dataset restores ₹274,000', async ({ page }) => {
   await addDebit(page);
   await page.goto('/?asOf=2025-04-20');
@@ -102,7 +118,7 @@ test('(f) Strategy: editing B1 clubs 15→16 recomputes live (2,417, headline st
   await page.goto('/strategy');
   await expect(page.getByTestId('base-total')).toHaveText('2,401');
   await expect(page.getByTestId('base-headline')).toHaveText('2,400');
-  await expect(page.getByTestId('stretch-headline')).toHaveText('2,850');
+  await expect(page.getByTestId('stretch-headline')).toHaveText('2,800');
   await expect(page.getByTestId('sensitivity')).toContainText('2,206');
   await expect(page.getByTestId('score-B1')).toHaveText('92');
   await page.getByTestId('as-b1_clubs-base').fill('16');

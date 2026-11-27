@@ -10,6 +10,8 @@ export interface ExperimentRule {
   scale_op: Op | string | null; scale_value: number | null; stop_op: Op | string | null; stop_value: number | null; min_sample?: number | null;
   guardrails?: unknown; bet_id?: string | null;
 }
+export const B5_QUALIFIED_CLICK_MINIMUM = 400;
+
 export type ExperimentDecision = 'scale' | 'change' | 'stop' | 'insufficient_sample';
 export interface ReadoutInput {
   observed_value?: number | null; observed_n?: number | null; kpi_numerator?: number | null; kpi_denominator?: number | null;
@@ -23,7 +25,7 @@ export interface ExperimentEvaluation { decision: ExperimentDecision; reasons: R
 
 /** Distinct decisions that sit next to the main Scale/Change/Stop readout (never merged into it). */
 export const EXPERIMENT_GATES: Record<string, { key: string; label: string; inputs: { key: string; label: string; op: Op; value: number; unit: string; gt?: number }[]; pass: GateResult['decision']; fail: GateResult['decision']; note: string }> = {
-  B5: { key: 'reserve_release', label: 'Reserve release (second ₹6k tranche)', pass: 'release', fail: 'hold', note: 'Released only on a complete B5 readout that meets the sample minimum with no hard guardrail breach, and only if the forecast shows ≥ 40 more visitors at > ₹0 and ≤ ₹150 marginal visitor cost.',
+  B5: { key: 'reserve_release', label: 'Reserve release (second ₹6k tranche)', pass: 'release', fail: 'hold', note: 'Released only on a complete B5 readout with at least 400 qualified clicks with no hard guardrail breach, and only if the forecast shows ≥ 40 more visitors at > ₹0 and ≤ ₹150 marginal visitor cost.',
     inputs: [{ key: 'forecast_extra_visitors', label: 'Forecast extra visitors', op: '>=', value: 40, unit: 'visitors' }, { key: 'forecast_visitor_cost_inr', label: 'Marginal visitor cost', op: '<=', value: 150, unit: '₹', gt: 0 }] },
   B4: { key: 'final_holdout_itt', label: 'Final holdout result (ITT verified show-up lift)', pass: 'scale_next_edition', fail: 'not_demonstrated', note: 'Separate from the T−2 reconfirmation gate: scale for next edition only at ≥ 4 pp lift with the 95% interval above zero.',
     inputs: [{ key: 'itt_lift_pp', label: 'ITT show-up lift', op: '>=', value: 4, unit: 'pp' }, { key: 'itt_ci_low_pp', label: 'Interval lower bound', op: '>', value: 0, unit: 'pp' }] },
@@ -86,11 +88,18 @@ export function adjudicateExperiment(e: ExperimentRule, input: ReadoutInput): Ex
     gates.push({ key: gd.key, label: gd.label, decision, reasons: gReasons, missing: gMissing });
   }
   const finish = (decision: ExperimentDecision): ExperimentEvaluation => {
+    const clicks = num(input.kpi_denominator);
+    const missingClickCounts = e.bet_id === 'B5' && (num(input.kpi_numerator) === null || clicks === null);
+    const belowClickMinimum = e.bet_id === 'B5' && clicks !== null && clicks < B5_QUALIFIED_CLICK_MINIMUM;
     // a release is only valid on a complete, sufficiently sampled readout with no hard breach observed: the reserve only funds bets that are still running
     for (const g of gates) {
       if (g.decision !== 'release') continue;
-      const why = decision === 'stop' ? 'blocked: experiment decision is Stop' : decision === 'insufficient_sample' ? 'blocked: main readout is incomplete or below its minimum sample' : hardBreach ? 'blocked: hard guardrail breached' : null;
-      if (why) { g.decision = hardBreach || decision === 'stop' ? 'hold' : 'insufficient_evidence'; g.reasons.push({ kind: 'stop', op: '', threshold: 0, value: null, passed: false, label: why }); }
+      const why = decision === 'stop' ? 'blocked: experiment decision is Stop' : decision === 'insufficient_sample' ? 'blocked: main readout is incomplete or below its minimum sample' : hardBreach ? 'blocked: hard guardrail breached' : missingClickCounts ? 'blocked: qualified-click KPI numerator and denominator are required' : belowClickMinimum ? `blocked: fewer than ${B5_QUALIFIED_CLICK_MINIMUM} qualified clicks` : null;
+      if (why) {
+        g.decision = hardBreach || decision === 'stop' ? 'hold' : 'insufficient_evidence';
+        if (missingClickCounts && g.decision === 'insufficient_evidence') g.missing.push('qualified-click KPI numerator and denominator');
+        g.reasons.push({ kind: 'stop', op: '', threshold: 0, value: null, passed: false, label: why });
+      }
     }
     return { decision, reasons, missing, guardrails, gates };
   };

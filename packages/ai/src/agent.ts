@@ -1,7 +1,7 @@
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { isStepCount, streamText, tool, type ModelMessage } from 'ai';
 import { TOOLS, runTool } from './tools';
-import { stripEvidence } from './evidence';
+import { modelToolOutput } from './evidence';
 import { systemPrompt } from './systemPrompt';
 import type { ToolEnv } from './env';
 
@@ -38,8 +38,7 @@ export function aiTools(env: ToolEnv, log: ToolLogEntry[]) {
   return Object.fromEntries(TOOLS.map((t) => [t.name, tool({
     description: t.description, inputSchema: t.schema,
     execute: async (args: any, opts?: { toolCallId?: string }) => { const t0 = Date.now(); const output = await runTool(env, t.name, args, opts?.toolCallId); log.push({ name: t.name, args, output, ms: Date.now() - t0 }); return output; },
-    // the client/UI gets the server-issued evidence refs; the model only sees the plain tool result
-    toModelOutput: ({ output }: any) => ({ type: 'json', value: stripEvidence(output) }),
+    toModelOutput: ({ output }: any) => ({ type: 'json', value: modelToolOutput(output) }),
   })]));
 }
 

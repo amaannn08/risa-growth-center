@@ -75,7 +75,7 @@ export const DEFAULT_ASSUMPTIONS: Assumption[] = [
   a('capacity', 'qr_lanes', 'all', 4, 'lanes', 'QR scan lanes', 'assumption'),
   a('capacity', 'scans_per_min', 'all', 8, 'scans/min/lane', 'Scans per minute per lane', 'assumption'),
   ...both('capacity', 'day1_visitors', 1400, 1600, 'people', 'Day-1 distinct visitors', 'assumption'),
-  ...both('capacity', 'day2_visitors', 1300, 1600, 'people', 'Day-2 distinct visitors', 'assumption'),
+  ...both('capacity', 'day2_visitors', 1300, 1592, 'people', 'Day-2 distinct visitors', 'assumption'),
   ...both('capacity', 'repeat_visitors', 300, 350, 'people', 'Repeat visitors across days', 'assumption'),
   // sensitivity
   a('sensitivity', 'showup_drop_pp', 'all', 5, 'pp', 'Show-up drop stress test', 'assumption'),

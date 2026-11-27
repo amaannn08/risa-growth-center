@@ -4,7 +4,7 @@ import { convertToModelMessages, createUIMessageStreamResponse, toUIMessageStrea
 import { getDb } from '@gc/db';
 import { clarifyingQuestion, executedFrom, groundingFromCalls, makeEnv, modelName, runJsonLoop, runMock, runNative, stripBadCitations, stripEvidence, type ToolLogEntry } from '@gc/ai';
 import { allow, clientId } from '@/lib/rateLimit';
-import { logChat, overDailyCap, replayStream } from '@/lib/copilot.server';
+import { logChat, overDailyCap, reconcileLedgerPostings, replayStream } from '@/lib/copilot.server';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -54,6 +54,8 @@ export async function POST(req: Request) {
     };
     const clarify = clarifyingQuestion(question, body.context, msgs.slice(0, msgs.map((m) => m.role).lastIndexOf('user')).map((m) => ({ role: m.role as 'user' | 'assistant', text: textOf(m) })));
     if (clarify) { await finish(clarify); return createUIMessageStreamResponse({ stream: replayStream(clarify, []) }); }
+    const ledger = await reconcileLedgerPostings(env, question, log);
+    if (ledger) { await finish(ledger); return createUIMessageStreamResponse({ stream: replayStream(ledger, log) }); }
     if (mode === 'mock') {
       const text = stripBadCitations(await runMock(env, question, log), executedFrom(log));
       await finish(text);

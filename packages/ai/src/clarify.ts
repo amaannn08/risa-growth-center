@@ -9,7 +9,8 @@ const CAMPAIGNS: [string, RegExp][] = [
 export const campaignsMentioned = (text: string) => CAMPAIGNS.filter(([, re]) => re.test(text)).map(([id]) => id);
 
 /** Measures a person can name. "better / worth / best" are judgements, NOT measures. */
-const METRIC = /\b(spen[dt]|spend|spending|cost|costs|cpa|budget|registrations?|registered|sign-?ups?|visitors?|attend\w*|show-?up|no-?shows?|confirm\w*|ctr|click\w*|conversion|per\s+visitor|per\s+registration)\b/i;
+const METRIC = /\b(spen[dt]|spend|spending|cost|costs|cpa|budget|registrations?|registered|sign-?ups?|visitors?|attend\w*|show-?up|no-?shows?|confirm\w*|ctr|click\w*|impressions?|conversion|per\s+visitor|per\s+registration)\b/i;
+const METRIC_PAIR = /\b(?:clicks?|impressions?|registrations?|visitors?|confirmations?|spend|cost|cpa|ctr|reach|show-?up|sessions?)\b/gi;
 /** The user explicitly says no measure has been chosen. */
 const NO_METRIC = /\bno\s+(?:success\s+|primary\s+)?(?:metric|measure|kpi)\b|\bwithout\s+(?:a\s+)?(?:success\s+)?(?:metric|measure|kpi)\b|\b(?:metric|measure|kpi)\s+(?:is\s+)?(?:not|isn.?t)\s+(?:chosen|set|picked|defined)\b|\bunset\b/i;
 const JUDGEMENT = /\b(better|best|worse|worst|worth|did\s+well|performed|more\s+valuable|prefer)\b/i;
@@ -79,7 +80,9 @@ export function clarifyingQuestion(question: string, context: ChatContext = {}, 
   if (!comparative || !aboutCampaigns) return null;
   const r = resolveComparison(question, context, history);
   const single = JUDGE_ONE.test(question) && !COMPARATIVE.test(question.replace(JUDGE_ONE, ''));
-  const needSubjects = !r.all && r.axis !== 'time' && r.subjects.length < (single ? 1 : 2);
+  const metrics = new Set([...question.matchAll(METRIC_PAIR)].map(([metric]) => metric.toLowerCase().replace(/s$/, '')));
+  const withinCampaign = r.subjects.length === 1 && metrics.size >= 2 && !/\b(?:other|second|another)\s+(?:campaign|channel)\b/i.test(question) && !/\b(?:which one|those two|them)\b/i.test(question);
+  const needSubjects = !r.all && r.axis !== 'time' && r.subjects.length < (single || withinCampaign ? 1 : 2);
   // a measure is only demanded for judgement-style asks ("better", "worth it"); a ranking question that names its measure is fine
   const needMetric = !r.metric && (JUDGEMENT.test(question) || NO_METRIC.test(question) || (needSubjects && !r.all));
   if (!needSubjects && !needMetric) return null;

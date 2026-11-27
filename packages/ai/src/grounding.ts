@@ -21,7 +21,7 @@ export function stripNonFigures(text: string): string {
   return text
     .replace(/\[(?:calculate|[a-z]+_[a-z_]+)(?:\s*·[^\]]*)?\]/g, ' ') // [tool · as_of · rev], [calculate · r69], [tool]
     .replace(/\(?\brev(?:ision)?\s*r?\d+\)?/gi, ' ')    // rev 12 / r7
-    .replace(/\b\d{4}-\d{2}-\d{2}\b/g, ' ')              // ISO dates
+    .replace(/\b\d{4}-\d{2}-\d{2}\b(?:[–—→]\d{1,2}\b)?/g, ' ')              // ISO dates
     .replace(/\b\d{1,2}:\d{2}(?::\d{2})?\b/g, ' ')       // times
     .replace(new RegExp(`\\b\\d{1,2}(?:\\s*(?:,|and|&|or)\\s*\\d{1,2})+\\s+${MONTHS}\\b`, 'gi'), ' ') // 16 and 18 April
     .replace(new RegExp(`\\b\\d{1,2}\\s*[–-]\\s*\\d{1,2}\\s+${MONTHS}\\b`, 'gi'), ' ') // 3–9 Mar
@@ -29,6 +29,7 @@ export function stripNonFigures(text: string): string {
     .replace(/(?<![\d.,])(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])\b/g, ' ') // MM-DD (week ends written without the year)
     .replace(new RegExp(`\\b\\d{1,2}(?:st|nd|rd|th)?\\s+${MONTHS}\\b`, 'gi'), ' ') // 9 Mar
     .replace(new RegExp(`\\b${MONTHS}\\s+\\d{1,2}(?:st|nd|rd|th)?\\b`, 'gi'), ' ') // Mar 9
+    .replace(/\b[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}\b/gi, ' ') // draft UUIDs
     .replace(/\b[A-Z]{2,}(?:-[A-Z]?\d+)+\b/g, ' ')     // activity / record ids: AD-C03-0416, MD-C05-0418
     .replace(/\b[A-Za-z]{1,4}[-−–]?\d+[A-Za-z]?\b/g, ' ') // C02, R0001, E0001, B1, T−14, CHK00012, P0
     .replace(/[×x*\/]\s*100\b(?!\s*[,\d])/g, ' ')                // ×100 / /…×100 in a shown formula
@@ -191,8 +192,8 @@ export const groundingLabel = (g: GroundingResult) => {
 };
 
 /** Bound evidence ref as issued by the server (see evidence.ts); structurally typed so the client bundle does not import server code. */
-export interface TurnRef { signedValue: number; unit?: string; metricField?: string; scope?: string | null; asOf?: string | null; revision?: number | null; toolCallId?: string }
-export interface TurnCall { tool: string; toolCallId?: string; asOf: string | null; revision: number | null; refs: TurnRef[]; /** named checkpoint → ISO date, as resolved by the tool run */ checkpoints?: Record<string, string> | null }
+export interface TurnRef { signedValue: number; unit?: string; metricField?: string; scope?: string | null; attribution?: string | null; asOf?: string | null; revision?: number | null; toolCallId?: string }
+export interface TurnCall { tool: string; toolCallId?: string; asOf: string | null; revision: number | null; refs: TurnRef[]; metric?: string; /** named checkpoint → ISO date, as resolved by the tool run */ checkpoints?: Record<string, string> | null }
 export interface Binding { raw: string; callId: string | null; tool: string; field: string; unit: string; signedValue: number; scope: string | null; asOf: string | null; revision: number | null }
 
 const CHECKPOINT_RES: [string, RegExp][] = [['event_close', /\bevent[\s-]*close\b/i], ['data_close', /\bdata[\s-]*close\b/i], ['day_1', /\b(?:day[\s-]*(?:1|one)|first\s+day|opening\s+day)\b/i]];
@@ -219,8 +220,71 @@ export function explicitDates(text: string, year: string | null): string[] {
 const LOSS_WORDS = /\b(?:lost|loss|fewer|less|declin\w*|decreas\w*|drop\w*|down|reduc\w*|minus|shortfall|gap|below|negative|fell|fall|short|cut|deficit|credit\w*|refund\w*|reversal|donor)\b/i;
 const INR_WORDS = /(?:₹|\bRs\b|\bINR\b|spen[dt]|spending|cost|budget|credit|debit|refund|headroom|\bcap\b|\bcpa\b|\bcpm\b|rupee|ledger|posting|\bnet\b|\bgross\b|paid)/i;
 const COUNT_WORDS = /\b(?:visitors?|people|persons?|registrations?|registered|attendees?|admissions?|admitted|check-?ins?|clicks?|impressions|sessions|scanner|scans?|confirmed|cancel\w*|waitlist\w*|no-?shows?|events?)\b/i;
-const OVERALL_WORDS = /\b(?:overall|event-wide|portfolio|programme|program|total|whole|all\s+(?:seven\s+)?campaigns|across)\b/i;
-const CAMPAIGN_NAMES = /\bC0[1-7]\b|ambassadors?|paid\s+social|creators?|college\s+partnerships?|student\s+referrals?|organic\s+search|community\s+groups?/i;
+const OVERALL_WORDS = /\b(?:overall|event-wide|portfolio|programme|program|whole|all\s+(?:seven\s+)?campaigns)\b/i;
+const CAMPAIGN_NAMES: [string, RegExp][] = [
+  ['C01', /\b(?:C01|(?:campus )?ambassadors?)\b/i],
+  ['C02', /\b(?:C02|paid social)\b/i],
+  ['C03', /\b(?:C03|creators?(?: partners?)?)\b/i],
+  ['C04', /\b(?:C04|college partnerships?)\b/i],
+  ['C05', /\b(?:C05|(?:student )?referrals?)\b/i],
+  ['C06', /\b(?:C06|organic search)\b/i],
+  ['C07', /\b(?:C07|community groups?)\b/i],
+];
+const ATTRIBUTIONS = ['first_touch', 'registration_source', 'checkin_source'] as const;
+
+export const campaignScope = (scope?: string | null) => /(?:^| )[(]?(C0[1-7])[)]?$/.exec(scope ?? '')?.[1];
+
+export function scopeConflict(text: string, ref: TurnRef): string | null {
+  const campaigns = CAMPAIGN_NAMES.filter(([, pattern]) => pattern.test(text)).map(([id]) => id);
+  const subject = campaignScope(ref.scope) ?? ref.scope;
+  if (campaigns.length === 1 && !OVERALL_WORDS.test(text)
+    && (campaignScope(ref.scope) || /^(?:overall|event-wide|range )/.test(ref.scope ?? ''))
+    && subject !== campaigns[0]) return `scope: the claim names ${campaigns[0]} but the field covers ${ref.scope}`;
+  const attribution = text.toLowerCase().replace(/[\s_–-]+/g, '_').replace(/check_in/g, 'checkin');
+  const views = ATTRIBUTIONS.filter((view) => (`_${attribution}_`).includes(`_${view}_`));
+  if (views.length === 1 && ref.attribution && ref.attribution !== views[0]) return `scope: the claim names ${views[0]} attribution but the field uses ${ref.attribution}`;
+  return null;
+}
+
+// More specific metrics precede the component counts that appear in their names.
+const CLAIM_METRICS: [string, RegExp][] = [
+  ['headroom', /\bheadroom\b/i],
+  ['visitor cpa', /\b(?:visitor cpa|cpa per visit(?:or|er)s?|(?:cost|spend|(?:posted )?rupees) per (?:unique (?:verified )?)?(?:visit(?:or|er)s?|attendees?))\b/i],
+  ['registration cpa', /\b(?:registration cpa|cpa per registration|cost per registration)\b/i],
+  ['gross spend', /\bgross\b/i],
+  ['credits', /\b(?:credits?|refunds?)\b/i],
+  ['posting', /\b(?:amount|debits?|positive postings?)\b/i],
+  ['net spend', /\b(?:net spend|(?:marketing )?spend|spent)\b/i],
+  ['scanner only', /\b(?:scanner only|only (?:by|via) scanner)\b/i],
+  ['manual only', /\b(?:manual only|only (?:by|via) manual)\b/i],
+  ['both sources', /\bboth (?:sources|methods)\b/i],
+  ['admissions', /\b(?:admissions?|check ins?|verified (?:admission )?events)\b/i],
+  ['distinct visitors', /\bdistinct visitors\b/i],
+  ['visitors', /\b(?:visitors?|attendees?|attended people|visitors unique verified)\b/i],
+  ['confirmed no shows', /\bconfirmed no shows?\b/i],
+  ['registered attended', /\bregistered and attended\b/i],
+  ['confirmed attended', /\bconfirmed and attended\b/i],
+  ['registered', /\b(?:registrations?|registered|sign ups?)\b/i],
+  ['confirmed', /\b(?:confirmed|confirmations?)\b/i],
+  ['cancelled', /\bcancell?ed\b/i],
+  ['identified', /\bidentified\b/i],
+  ['clicks', /\bclicks?\b/i],
+  ['impressions', /\bimpressions?\b/i],
+];
+const metricKeys = (text: string) => CLAIM_METRICS.filter(([, re]) => re.test(text.replace(/[_–-]+/g, ' ').replace(/\s*∩\s*/g, ' and '))).map(([key]) => key);
+export function claimMetric(text: string, ref: TurnRef, metric?: string): boolean | null {
+  const field = ref.metricField ?? '';
+  const leaf = field.split('.').at(-1) ?? '';
+  const creditRow = /^credits\[/.test(field);
+  const semantic = creditRow && leaf === 'amount' ? 'credit'
+    : leaf === 'events' && field.startsWith('by_day[') ? 'verified admission events'
+    : /^(?:value|pct)$/.test(leaf) && metric ? metric : leaf;
+  const mentioned = metricKeys(text), actual = metricKeys(semantic)[0];
+  if (!mentioned.length || !actual) return null;
+  const expected = mentioned[0];
+  if (expected === 'visitors' && actual === 'distinct visitors' || expected === 'distinct visitors' && actual === 'visitors') return true;
+  return expected === actual;
+}
 const isInr = (u?: string) => !!u && /inr|₹|rupee/i.test(u);
 const isPct = (u?: string) => !!u && /fraction|percent|pct|rate|%/i.test(u);
 
@@ -238,14 +302,21 @@ export function claimCheck(answer: string, calls: TurnCall[]): { mismatches: Gro
     const scoping = sentence.replace(/\b(?:day[\s-]*(?:1|one)|first\s+day|event[\s-]*close|data[\s-]*close)\s*(?:=|:|is|was|on)\s*\d{4}-\d{2}-\d{2}/gi, ' ').replace(/\bevent\s+(?:had\s+not\s+started|starts?|started|opens?|opened)\b/gi, ' ').replace(/\b(?:after|before|since|post-?|between|until|through|following|beyond|past|from|by|day\s+before)\s+(?:the\s+)?(?:(?:event|data)[\s-]*close|day[\s-]*(?:1|one)|first\s+day)/gi, ' ');
     const forecast = /\b(?:project\w*|forecast\w*|scenario|expected|will|plan\w*|target|if you want|want me to|next step|suggest\w*|I can|re-?run|re-?pull|check)\b/i.test(sentence);
     const cps = forecast ? [] : namedCheckpointDates(scoping, checkpoints);
-    const wantDates = cps;
-    const namesCampaign = CAMPAIGN_NAMES.test(sentence), saysOverall = OVERALL_WORDS.test(sentence);
+    const localCitations = parseCitations(sentence);
+    const claim = sentence.replace(/\[[^\]\n]+\]/g, '').replace(/(\d[^—]*)\s+—\s+[^0-9]+$/, '$1');
+    const explicit = explicitDates(scoping.replace(/\[[^\]\n]+\]/g, ''), year);
+    const wantDates = cps.length ? cps : !forecast && toks.length === 1 && explicit.length === 1 && /\b(?:as of|at|on)\b/i.test(scoping) ? explicit : [];
     const inrCtx = INR_WORDS.test(sentence), cntCtx = COUNT_WORDS.test(sentence);
     for (const t of toks) {
       const cands = all.filter(({ r }) => figureMatches(t.value, t.dp, r.signedValue) || (Math.abs(r.signedValue) <= 10 && figureMatches(t.value, t.dp, r.signedValue * 100)) || (t.dp === 0 && figureMatches(t.value, 0, Math.round(r.signedValue))));
       if (t.value === 0) continue; // a bare zero is ambiguous across fields (0 visitors, 0.00% show-up): nothing to bind
       if (!cands.length) continue; // untraced / derived / user input: handled by the figure check
       const why = new Map<TurnRef, string>();
+      const isRatio = /\b(?:rate|fraction|ratio|percent|share)\b|\d\s*[/×]\s*\d/i.test(sentence);
+      const measures = metricKeys(claim);
+      const simpleMetric = measures.length === 1 || (measures.length === 2 && measures[0] === 'distinct visitors');
+      const checkMetric = toks.length === 1 && simpleMetric && !forecast && !isRatio && !t.pct && !t.pp &&
+        cands.some(({ c, r }) => claimMetric(claim, r, c.metric) !== null);
       for (const { c, r } of cands) {
         const unit = r.unit ?? 'count', unknownUnit = unit === 'unknown';
         const fracMatch = Math.abs(r.signedValue) <= 10 && !figureMatches(t.value, t.dp, r.signedValue) && figureMatches(t.value, t.dp, r.signedValue * 100);
@@ -263,10 +334,21 @@ export function claimCheck(answer: string, calls: TurnCall[]): { mismatches: Gro
           // named checkpoints and explicit dates only bind point-in-time / cumulative figures; a ranged figure has its own bounds
           const ranged = !!r.scope && /^range /.test(r.scope);
           const pointTool = /^(?:get_funnel|get_targets|get_spend_ledger|compare_campaigns)$/.test(c.tool);
-          const needs = pointTool ? cps : [];
+          const needs = pointTool || /^(?:get_attendance|get_trend)$/.test(c.tool) ? wantDates : [];
           if (needs.length && !ranged && r.asOf && !needs.includes(r.asOf)) bad = `scope: the sentence is about ${needs.join(' / ')} but the cited field is as of ${r.asOf}`;
         }
-        if (!bad && namesCampaign && !saysOverall && !forecast && r.scope === 'event-wide') bad = 'scope: the sentence names a campaign but the cited field is event-wide';
+        const comparison = toks.length > 1 && (measures.length > 1 || /\b(?:vs|versus|compared|against)\b/i.test(claim));
+        if (!bad && !forecast && !comparison && c.tool !== 'calculate') bad = scopeConflict(claim, r) ?? '';
+        if (!bad && checkMetric && (!unknownUnit || c.tool === 'get_funnel' || c.tool === 'get_spend_ledger')
+          && claimMetric(claim, r, c.metric) !== true) bad = 'metric: the claim names a different measure from the cited field';
+        if (!bad && t.cur && toks.length === 1 && r.signedValue < 0 && /\b(?:increased?|rose|went up|added)\b/i.test(sentence) && !LOSS_WORDS.test(sentence)) bad = 'sign: the claim describes an increase but the tool value is negative';
+        // One citation on a multi-figure line can support a calculation or table cell alone.
+        if (!bad && toks.length === 1 && !isRatio && localCitations.length === 1
+          && !localCitations.some((citation) => citation.tool === c.tool
+            && (citation.revision === null || c.revision === null || citation.revision === c.revision)
+            && (citation.asOf === null || c.asOf === null || [c.asOf, r.asOf].includes(citation.asOf)))) {
+          bad = 'citation: the cited tool call did not return this figure';
+        }
         if (!bad) { bindings.push({ raw: t.raw, callId: c.toolCallId ?? null, tool: c.tool, field: r.metricField ?? '', unit, signedValue: r.signedValue, scope: r.scope ?? null, asOf: r.asOf ?? c.asOf, revision: r.revision ?? c.revision }); why.clear(); break; }
         why.set(r, bad);
       }
